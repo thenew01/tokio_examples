@@ -4,6 +4,8 @@ version = "0.0.0"
 publish = false
 edition = "2018"
 
+[workspace]
+
 [dev-dependencies]
 tokio = { version = "0.2.0", path = "../tokio", features = ["full"] }
 tokio-util = { version = "0.2.0", path = "../tokio-util", features = ["full"] }
