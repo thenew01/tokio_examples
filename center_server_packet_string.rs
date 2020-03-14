@@ -338,6 +338,7 @@ async fn process(
     builder.little_endian();
     builder.length_field_length(2);
     builder.length_adjustment(-2);
+    
     if !is_server{
         builder.first_packet_no_length_field(true);
         builder.is_server(false);
