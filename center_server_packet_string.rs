@@ -28,23 +28,25 @@
 use std::str;
 use std::str::FromStr;
 use tokio::net::{TcpListener, TcpStream};
+use std::net::SocketAddr;
+use std::net::{IpAddr,  Shutdown};
+use std::time::Duration;
 use tokio::stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
-use tokio_util::codec::{Framed, BytesCodec, LengthDelimitedCodec, Builder, LengthDelimitedCodecError};
+use tokio_util::codec::{Framed,  LengthDelimitedCodec, Builder, LengthDelimitedCodecError};
 
 use futures::SinkExt;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::io;
-use std::net::SocketAddr;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use bytes::Bytes;
-use bytes::BytesMut;
-//use tini::Ini;
+//use bytes::BytesMut;
+////use tini::Ini;
 use ini::Ini;
 //use std::intrinsics::size_of;
 //use crate::msg_from_client::data_to_server;
@@ -119,6 +121,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Asynchronously wait for an inbound TcpStream.
         let (stream, _addr) = listener.accept().await?;
 
+        //stream.set_nonblocking(true);
+        stream.set_nodelay(true);
+        //stream.set_linger(Some( Duration::new(1,0)));
+        stream.set_keepalive(Some(Duration::new(60, 0)));
+
         // Clone a handle to the `Shared` state for the new connection.
         let state = Arc::clone(&state);
 
@@ -162,12 +169,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let mut msg_r = String::from_utf8_lossy(&len[0..2]).to_string();
                 msg_r.push_str(&String::from_utf8_lossy(&buf[0..12]).to_string() );
                 */
+                let ip = _addr.ip().to_string();
 
+                let mut msg_r = unsafe { String::from_utf8_unchecked(buf ) };
+                msg_r.push_str(&ip);
                 let mut state = state.lock().await;
-                state.sendto_server(&_addr, unsafe { &&String::from_utf8_unchecked(buf ) } ).await;
+                state.sendto_server(&_addr, &msg_r ).await;
             }
             if let Err(e) = process(state, stream, local_addr, _addr, peer_id3, is_server).await {
-                println!("an error occured; error = {:?}", e);
+                println!("an error occurred; 000 !!!! error = {:?}", e);
+                // let peer_id = peer_id.clone();
+                // if !is_server == false {
+                //     notify_server_client_disconnected(&peer_id, &state, &_addr).await;
+                // }
             }
         });
     }
@@ -227,6 +241,7 @@ impl Shared {
             }
         }
     }
+
     async fn sendto_server(&mut self, server: &SocketAddr, message: &String) {
         for server in self.servers.iter_mut() {
             //if *server.0 == server
@@ -263,7 +278,8 @@ impl Peer {
             state.lock().await.servers.insert(addr, tx);
         }
         else {
-            //state.lock().await.peers.insert(addr, tx);
+            //let txSend = tx.clone();
+            //state.lock().await.peers.insert(addr, txSend);
             state.lock().await.peer_ids.insert(client_id, tx);
         }
 
@@ -320,7 +336,7 @@ impl Stream for Peer {
             _ => None,
 
             // The stream has been exhausted.
-            None => None,
+            //None => None,
         })
     }
 }
@@ -348,7 +364,9 @@ async fn process(
         builder.is_server(true);
     }
 
+    //stream.shutdown(Shutdown::Both);
     //builder.encoded(true);
+
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new());
     let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new_from_builder(builder));
     //let codec = LengthDelimitedCodec::builder().little_endian();
@@ -412,28 +430,7 @@ async fn process(
                     let id = [msg_r[0], msg_r[1], msg_r[2], msg_r[3], msg_r[4], msg_r[5], msg_r[6], msg_r[7]];
                     let client_id0= i64::from_le_bytes( id );
 
-                    //let len : vec;
-                    if !first_packet_to_client {
-                        //decode packet head
-                        //len = msg_r[8..10].to_vec();
-                        //encode_head( msg_r[8..10] );
-                    }
-
-                    /*let mut v = msg_r[8..10].to_vec();
-                    let v0 = v.clone();
-                    let v1 = v0[0] | (v0[1] << 8);
-                    //let v2 = v1.clone();
-                    println!("{} {} i16 {}", v[0], v[1], v1);
-
-                    encode_head( &mut v ); //在length_delimiter里调用了一次是解密，再次则是加密
-
-                    let v3 = v[0] | ( v[1] << 8 );
-                    println!("{} {} i16 {}", v[0], v[1], v3);
-
-                    let mut msg_r2 = "".to_string();
-                    msg_r2.push(v[0] as char);
-                    msg_r2.push(v[1] as char);*/
-
+                    //在encoder里不额外添加包头发给客户端
                     let mut msg_r2 = "".to_string();
                     msg_r2.push_str(unsafe { &String::from_utf8_unchecked(msg_r[8..].to_vec()) } );
                     state.sendto_client_by_id( client_id0, &msg_r2).await;
@@ -462,34 +459,16 @@ async fn process(
                 buf[10] = ((msg_type >> 16 ) & 0xff) as u8;
                 buf[11] = ((msg_type >> 24 ) & 0xff) as u8;
 
-                //let packet_len : i16 = msg.len() as i16;
-                //let len: [u8; 2] = packet_len.to_le_bytes();
-
                 let mut msg_r = unsafe { String::from_utf8_unchecked(buf ) };
-                //msg_r.push_str(&String::from_utf8_lossy(&len[0..2]).to_string() );
-
-                let mut len = msg.len()+2;  //+2 length field length
                 //println!("to server1: {} ", len);
-
+                let mut len = msg.len()+2;  //+2 length field length decode时去除了包头（长度），因此这里要加上再给服务器
                 let mut len = vec!( (len & 0xff) as u8, ( ( len >> 8 ) & 0xff) as u8 );
-
                 let len2 = encode_head( &mut len ); //在length_delimiter里调用了一次是解密，再次则是加密
-
-                //let len3 = [len2[0], len2[1]];
-
-                /*let mut len22 = len2.clone();
-                let len4 = encode_head(&mut len22);
-                println!("to server1-1: {}", len4[0] | len4[1]); */
 
                 //println!("to server2: {}", len2[0] | len2[1]);
 
-                let len5 = unsafe { String::from_utf8_unchecked(len2) } ;
+                let len5 = unsafe { String::from_utf8_unchecked(len2) } ; //如果不是有效utf8，则会分配并替换为有效的utf8字符
                 msg_r.push_str( &len5 );
-                //msg_r.push(len2[0] as char); //如果不是有效utf8，则会分配并替换
-                //msg_r.push(len2[1] as char);
-
-                //println!("to server2-1: {}", len3[0] | len3[1]);
-
                 msg_r.push_str(&msg[..]);
 
                 state.sendto_server(&addr,  &msg_r ).await;
@@ -499,10 +478,43 @@ async fn process(
             // current user.
             Ok(Message::Received(msg)) => {
                 //println!("recv is_server {},peer.is_server {} ", &is_server, &peer.is_server);
-                peer.frames.send( Bytes::from( msg) ).await?;
+                if msg.len() == 0 {
+                    if !is_server {
+                        println!("close the client {} {} because the server is disconnected", peer_id, addr);
+                    }
+                    peer.frames.into_inner().shutdown(Shutdown::Both );
+                    break;
+                }
+                if is_server == false {
+                    let inner_msg_type = unsafe { msg.get_unchecked(4..5) };
+                    let inner_msg_type= String::from(inner_msg_type).into_bytes();
+                    let inner_msg_type =  ( inner_msg_type[0] ^ 0xcf ) & 0xff;
+                    if inner_msg_type == 3 || inner_msg_type == 14 {
+                        println!("connection {} {} closed, because recv MSG_CLOSE or MSG_DISCONNECT", peer_id, addr);
+                        let mut state = state.lock().await;
+                        let client_id = peer_id.clone();
+                        state.peer_ids.remove(&client_id);
+                        peer.frames.close().await;
+                        peer.frames.into_inner().shutdown(Shutdown::Both);
+                        return Ok(());
+                    }
+                }
+
+                if let Err(e) = peer.frames.send(Bytes::from(msg)).await {
+                    println!("connection {} {} closed", peer_id, addr);
+                    let mut state = state.lock().await;
+                    let client_id = peer_id.clone();
+                    state.peer_ids.remove(&client_id);
+                    peer.frames.close().await;
+                    peer.frames.into_inner().shutdown(Shutdown::Both);
+                    return Err(Box::<dyn Error>::from(e));
+                };
+
             }
             Err(e) => {
                 println!( "an error occurred while processing messages for {}; error = {:?}",username, e);
+
+                notify_server_client_disconnected(&peer_id, &state, &addr).await;
                 break;
             }
         }
@@ -511,57 +523,56 @@ async fn process(
     // If this section is reached it means that the client was disconnected!
     // Let's let everyone still connected know about it.
     {
-        let mut state = state.lock().await;
-
         //notify server or client
         if is_server {
             let msg = format!("server {} has left the session", peer_id2);
             println!("{}", msg);
 
-            /*let msg_type = 100004;
-            let mut buf = [0u8; 4].to_vec();
-            buf[0] = ((msg_type >> 0 ) & 0xff ) as u8;
-            buf[1] = (( msg_type >> 8 ) & 0xff ) as u8;
-            buf[2] = (( msg_type >> 16 ) & 0xff ) as u8;
-            buf[3] = (( msg_type >> 24 ) & 0xff ) as u8;
-            //let mut msg_r = String::from_utf8_lossy(&buf[0..4]).to_string();
-            let msg_r2 = unsafe { &String::from_utf8_unchecked(buf[..].to_vec()) };
-            */
-            let msg_r2= "".to_string(); //send 0 bytes to close client
+            let msg_r2= "".to_string(); //send 0 bytes to client notify server is closed
+
+            let mut state = state.lock().await;
             state.broadcast(&msg_r2 ).await;
 
             state.servers.remove(&addr);
         }
         else {
-            let msg = format!("client {} has left the session", peer_id2);
-            println!("{}", msg);
-            //state.broadcast(addr,  Bytes::from(msg)).await;
-
-            let mut buf : Vec<u8> = [0u8; 12].to_vec();
-            let client_id = peer_id.clone();
-            buf[0]= ( client_id & 0xff ) as u8;
-            buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
-            buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
-            buf[3] = ( ( client_id >> 24 ) & 0xff ) as u8;
-            buf[4] = ( ( client_id >> 32 ) & 0xff ) as u8;
-            buf[5] = ( ( client_id >> 40 ) & 0xff ) as u8;
-            buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
-            buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
-
-            let msg_type = 20002;
-            buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
-            buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
-            buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
-            buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;
-
-            let mut msg_r = unsafe{ String::from_utf8_unchecked(buf) };
-            state.sendto_server(&addr,  &msg_r ).await;
-
-            println!( "client {} {} disconnected, notify server", client_id, addr);
-
-            state.peer_ids.remove(&client_id);
+            notify_server_client_disconnected(&peer_id2, &state, &addr).await;
         }
     }
 
     Ok(())
+}
+
+async fn notify_server_client_disconnected( peer_id :&i64, state: &Arc<Mutex<Shared>>, addr: &SocketAddr) {
+    let peer_id2 = peer_id.clone();
+
+    let msg = format!("client {} has left the session", peer_id2);
+    println!("{}", msg);
+    //state.broadcast(addr,  Bytes::from(msg)).await;
+
+    let mut buf : Vec<u8> = [0u8; 12].to_vec();
+    let client_id = peer_id.clone();
+    buf[0]= ( client_id & 0xff ) as u8;
+    buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
+    buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
+    buf[3] = ( ( client_id >> 24 ) & 0xff ) as u8;
+    buf[4] = ( ( client_id >> 32 ) & 0xff ) as u8;
+    buf[5] = ( ( client_id >> 40 ) & 0xff ) as u8;
+    buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
+    buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
+
+    let msg_type = 20002;
+    buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
+    buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
+    buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
+    buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;
+
+    let mut msg_r = unsafe{ String::from_utf8_unchecked(buf) };
+
+    let mut state = state.lock().await;
+    state.sendto_server(&addr,  &msg_r ).await;
+
+    println!( "client {} {} disconnected, notify server", client_id, addr);
+
+    state.peer_ids.remove(&client_id);
 }
