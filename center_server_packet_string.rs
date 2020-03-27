@@ -48,8 +48,20 @@ use bytes::Bytes;
 //use bytes::BytesMut;
 ////use tini::Ini;
 use ini::Ini;
+
 //use std::intrinsics::size_of;
 //use crate::msg_from_client::data_to_server;
+
+use console::Term;
+
+#[macro_use]
+extern crate log;
+extern crate simple_logger;
+extern crate simplelog;
+
+use simplelog::*;
+
+use std::fs::File;
 
 enum msg_server
 {
@@ -90,6 +102,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut listener = TcpListener::bind(&addr).await?;
 
     println!("server running on {}", addr);
+    //simple_logger::init().unwrap();
+
+    //warn!("This is an example message.");
+    CombinedLogger::init(
+        vec![
+            TermLogger::new(LevelFilter::Warn,
+                            ConfigBuilder::new().set_time_format_str("%Y-%m-%d %H:%M:%S").build(),
+                            TerminalMode::Mixed).unwrap(),
+            WriteLogger::new(LevelFilter::Info,
+                             ConfigBuilder::new().set_time_format_str("%Y-%m-%d %H:%M:%S").build(),
+                             File::create("net.log").unwrap()),
+        ]
+    ).unwrap();
+
+    //error!("Bright red error\n");
+    warn!("gate started");
+    //info!("gate started");
+    //debug!("This level is currently not enabled for any logger\n");
+
+    let term = Term::stdout();
+    //term.set_title()
 
     let ip : Vec<&str> = addr.split(':').collect();
     let ip = ip[0];
@@ -124,23 +157,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         //stream.set_nonblocking(true);
         stream.set_nodelay(true);
         //stream.set_linger(Some( Duration::new(1,0)));
-        stream.set_keepalive(Some(Duration::new(60, 0)));
+        stream.set_keepalive(Some(Duration::new(60*5, 0)));
 
         // Clone a handle to the `Shared` state for the new connection.
         let state = Arc::clone(&state);
 
         client_id += 1;
+
+        //let client_num = client_id.clone();
+        //term.set_title(client_num);
+
         peer_id += 1;
         let peer_id2: i64 = peer_id.clone();
         let mut peer_id3 = peer_id.clone();
 
-        println!("{} {} has connected", _addr, peer_id);
+        warn!("session [{}] {} has connected", peer_id, _addr);
 
         let mut is_server = false;
         if peer_id == 0 {
             //if _addr.port().to_string() == server_port {
             is_server = true;
-            println!("server is incoming");
+            warn!("server is incoming");
         }
 
         // Spawn our handler to be run asynchronously.
@@ -177,7 +214,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 state.sendto_server(&_addr, &msg_r ).await;
             }
             if let Err(e) = process(state, stream, local_addr, _addr, peer_id3, is_server).await {
-                println!("an error occurred; 000 !!!! error = {:?}", e);
+                warn!("an error occurred; 000 !!!! connection {} {} error = {:?}", peer_id3, _addr, e);
                 // let peer_id = peer_id.clone();
                 // if !is_server == false {
                 //     notify_server_client_disconnected(&peer_id, &state, &_addr).await;
@@ -480,7 +517,7 @@ async fn process(
                 //println!("recv is_server {},peer.is_server {} ", &is_server, &peer.is_server);
                 if msg.len() == 0 {
                     if !is_server {
-                        println!("close the client {} {} because the server is disconnected", peer_id, addr);
+                        warn!("close the client [{}] {} because the server is disconnected", peer_id, addr);
                     }
                     peer.frames.into_inner().shutdown(Shutdown::Both );
                     break;
@@ -490,7 +527,7 @@ async fn process(
                     let inner_msg_type= String::from(inner_msg_type).into_bytes();
                     let inner_msg_type =  ( inner_msg_type[0] ^ 0xcf ) & 0xff;
                     if inner_msg_type == 3 || inner_msg_type == 14 {
-                        println!("connection {} {} closed, because recv MSG_CLOSE or MSG_DISCONNECT", peer_id, addr);
+                        warn!("connection [{}] {} closed, because recv MSG_CLOSE or MSG_DISCONNECT", peer_id, addr);
                         let mut state = state.lock().await;
                         let client_id = peer_id.clone();
                         state.peer_ids.remove(&client_id);
@@ -501,7 +538,7 @@ async fn process(
                 }
 
                 if let Err(e) = peer.frames.send(Bytes::from(msg)).await {
-                    println!("connection {} {} closed", peer_id, addr);
+                    warn!("connection {} {} closed send failed ", peer_id, addr);
                     let mut state = state.lock().await;
                     let client_id = peer_id.clone();
                     state.peer_ids.remove(&client_id);
@@ -512,7 +549,7 @@ async fn process(
 
             }
             Err(e) => {
-                println!( "an error occurred while processing messages for {}; error = {:?}",username, e);
+                warn!( "an error occurred while processing messages for {}; error = {:?}",username, e);
 
                 notify_server_client_disconnected(&peer_id, &state, &addr).await;
                 break;
@@ -525,8 +562,8 @@ async fn process(
     {
         //notify server or client
         if is_server {
-            let msg = format!("server {} has left the session", peer_id2);
-            println!("{}", msg);
+            let msg = format!("server [{}] has left the session", peer_id2);
+            warn!("{}", msg);
 
             let msg_r2= "".to_string(); //send 0 bytes to client notify server is closed
 
@@ -546,8 +583,8 @@ async fn process(
 async fn notify_server_client_disconnected( peer_id :&i64, state: &Arc<Mutex<Shared>>, addr: &SocketAddr) {
     let peer_id2 = peer_id.clone();
 
-    let msg = format!("client {} has left the session", peer_id2);
-    println!("{}", msg);
+    let msg = format!("client [{}] has left the session", peer_id2);
+    warn!("{}", msg);
     //state.broadcast(addr,  Bytes::from(msg)).await;
 
     let mut buf : Vec<u8> = [0u8; 12].to_vec();
@@ -572,7 +609,7 @@ async fn notify_server_client_disconnected( peer_id :&i64, state: &Arc<Mutex<Sha
     let mut state = state.lock().await;
     state.sendto_server(&addr,  &msg_r ).await;
 
-    println!( "client {} {} disconnected, notify server", client_id, addr);
+    warn!( "client [{}] {} disconnected, notify server", client_id, addr);
 
     state.peer_ids.remove(&client_id);
 }

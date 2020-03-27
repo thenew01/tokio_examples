@@ -20,6 +20,10 @@ time = "0.1"
 copy_in_place = "0.2.1"
 tini = "0.2.0"
 rust-ini = "0.14.0"
+log = { version = "^0.4.5", features = ["std"] }
+simple_logger="1.6.0"
+simplelog = "^0.7.4"
+console="0.10.0"
 
 [[example]]
 name = "chat"
