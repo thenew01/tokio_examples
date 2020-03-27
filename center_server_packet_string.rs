@@ -50,7 +50,16 @@ use bytes::Bytes;
 use ini::Ini;
 
 //use std::intrinsics::size_of;
-//use crate::msg_from_client::data_to_server;
+use log::{debug, error, info, trace, warn, LevelFilter, SetLoggerError};
+use log4rs::{
+    append::{
+        console::{ConsoleAppender, Target},
+        file::FileAppender,
+    },
+    config::{Appender, Config, Root},
+    encode::pattern::PatternEncoder,
+    filter::threshold::ThresholdFilter,
+};
 
 use console::Term;
 
@@ -85,6 +94,29 @@ fn encode_head(src : &mut Vec<u8> ) -> Vec<u8> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+
+    // CombinedLogger::init(
+    //     vec![
+    //         TermLogger::new(LevelFilter::Warn,
+    //                         ConfigBuilder::new().set_time_format_str("%Y-%m-%d %H:%M:%S").build(),
+    //                         TerminalMode::Mixed).unwrap(),
+    //         WriteLogger::new(LevelFilter::Info,
+    //                          ConfigBuilder::new().set_time_format_str("%Y-%m-%d %H:%M:%S").build(),
+    //                          File::create("net.log").unwrap()),
+    //     ]
+    // ).unwrap();
+
+    log4rs::init_file("config/log4rs.yaml", Default::default()).unwrap();
+
+    //info!("booting up");
+    //error!("Bright red error\n");
+    info!("gate started");
+    //info!("gate started");
+    //debug!("This level is currently not enabled for any logger\n");
+    //warn!("This is an example message.");
+
+    //simple_logger::init().unwrap();
+
     // Create the shared state. This is how all the peers communicate.
     //
     // The server task will hold a handle to this. For every new client, the
@@ -101,25 +133,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Note that this is the Tokio TcpListener, which is fully async.
     let mut listener = TcpListener::bind(&addr).await?;
 
-    println!("server running on {}", addr);
-    //simple_logger::init().unwrap();
-
-    //warn!("This is an example message.");
-    CombinedLogger::init(
-        vec![
-            TermLogger::new(LevelFilter::Warn,
-                            ConfigBuilder::new().set_time_format_str("%Y-%m-%d %H:%M:%S").build(),
-                            TerminalMode::Mixed).unwrap(),
-            WriteLogger::new(LevelFilter::Info,
-                             ConfigBuilder::new().set_time_format_str("%Y-%m-%d %H:%M:%S").build(),
-                             File::create("net.log").unwrap()),
-        ]
-    ).unwrap();
-
-    //error!("Bright red error\n");
-    warn!("gate started");
-    //info!("gate started");
-    //debug!("This level is currently not enabled for any logger\n");
+    info!("gate running on {}", addr);
 
     let term = Term::stdout();
     //term.set_title()
@@ -128,7 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ip = ip[0];
     let local_addr = IpAddr::from_str(&ip).unwrap();
 
-   /*let mut server_ip: String;
+    /*let mut server_ip: String;
     let mut server_port: String = "".to_string();
     let i = Ini::load_from_file("conf.ini").unwrap();
     for (sec, prop) in i.iter() {
@@ -171,13 +185,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let peer_id2: i64 = peer_id.clone();
         let mut peer_id3 = peer_id.clone();
 
-        warn!("session [{}] {} has connected", peer_id, _addr);
+        info!("session [{}] {} has connected", peer_id, _addr);
 
         let mut is_server = false;
         if peer_id == 0 {
             //if _addr.port().to_string() == server_port {
             is_server = true;
-            warn!("server is incoming");
+            info!("server is incoming");
         }
 
         // Spawn our handler to be run asynchronously.
