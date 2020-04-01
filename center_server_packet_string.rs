@@ -537,17 +537,19 @@ async fn process(
                     break;
                 }
                 if is_server == false {
-                    let inner_msg_type = unsafe { msg.get_unchecked(4..5) };
-                    let inner_msg_type= String::from(inner_msg_type).into_bytes();
-                    let inner_msg_type =  ( inner_msg_type[0] ^ 0xcf ) & 0xff;
-                    if inner_msg_type == 3 || inner_msg_type == 14 {
-                        warn!("connection [{}] {} closed, because recv MSG_CLOSE or MSG_DISCONNECT", peer_id, addr);
-                        let mut state = state.lock().await;
-                        let client_id = peer_id.clone();
-                        state.peer_ids.remove(&client_id);
-                        peer.frames.close().await;
-                        peer.frames.into_inner().shutdown(Shutdown::Both);
-                        return Ok(());
+                    if msg.len() > 4 {
+                        let inner_msg_type = unsafe { msg.get_unchecked(4..5) };
+                        let inner_msg_type= String::from(inner_msg_type).into_bytes();
+                        let inner_msg_type =  ( inner_msg_type[0] ^ 0xcf ) & 0xff;
+                        if inner_msg_type == 3 || inner_msg_type == 14 {
+                            warn!("connection [{}] {} closed, because recv MSG_CLOSE or MSG_DISCONNECT", peer_id, addr);
+                            let mut state = state.lock().await;
+                            let client_id = peer_id.clone();
+                            state.peer_ids.remove(&client_id);
+                            peer.frames.close().await;
+                            peer.frames.into_inner().shutdown(Shutdown::Both);
+                            return Ok(());
+                        }
                     }
                 }
 
