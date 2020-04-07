@@ -221,9 +221,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 msg_r.push_str(&String::from_utf8_lossy(&buf[0..12]).to_string() );
                 */
                 let ip = _addr.ip().to_string();
+                let port = _addr.port().to_string();
 
                 let mut msg_r = unsafe { String::from_utf8_unchecked(buf ) };
                 msg_r.push_str(&ip);
+                msg_r.push(':');
+                msg_r.push_str(&port);
+
                 let mut state = state.lock().await;
                 state.sendto_server(&_addr, &msg_r ).await;
             }
