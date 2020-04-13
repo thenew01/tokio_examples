@@ -33,7 +33,7 @@ use std::net::{IpAddr,  Shutdown};
 use std::time::Duration;
 use tokio::stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
-use tokio_util::codec::{Framed,  LengthDelimitedCodec, Builder, LengthDelimitedCodecError};
+use tokio_util::codec::{Framed,  LengthDelimitedCodec, Builder};//, LengthDelimitedCodecError};
 
 use futures::SinkExt;
 use std::collections::HashMap;
@@ -47,11 +47,11 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 //use bytes::BytesMut;
 ////use tini::Ini;
-use ini::Ini;
+//use ini::Ini;
 
 //use std::intrinsics::size_of;
 use log::{debug, error, info, trace, warn, LevelFilter, SetLoggerError};
-use log4rs::{
+/*use log4rs::{
     append::{
         console::{ConsoleAppender, Target},
         file::FileAppender,
@@ -59,20 +59,21 @@ use log4rs::{
     config::{Appender, Config, Root},
     encode::pattern::PatternEncoder,
     filter::threshold::ThresholdFilter,
-};
+};*/
 
-use console::Term;
+//use console::Term;
 
-#[macro_use]
+/*#[macro_use]
 extern crate log;
 extern crate simple_logger;
 extern crate simplelog;
+*/
 
-use simplelog::*;
+//use simplelog::*;
 
-use std::fs::File;
-
-enum msg_server
+//use std::fs::File;
+/*
+enum MsgServer
 {
     ID_CLIENT_CONNECTED = 20001,
     ID_CLIENT_DISCONNECTED = 20002,
@@ -80,12 +81,12 @@ enum msg_server
     ID_REGISTER_RESPONSE = 20004,
 }
 
-enum msg_client
+enum MsgClient
 {
     ID_DATA_EVENT = 100001,
     ID_SERVER_DISCONNECTED = 100004,
 }
-
+*/
 fn encode_head(src : &mut Vec<u8> ) -> Vec<u8> {
     src[0] = ( src[0] ^ 0xcf ) & 0xff;
     src[1] = ( src[1] ^ 0xcf ) & 0xff;
@@ -128,50 +129,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:8080".to_string());
 
+    let gs_addr = env::args()
+        .nth(2)
+        .unwrap_or_else(|| "127.0.0.1:8081".to_string());
+
     // Bind a TCP listener to the socket address.
     //
     // Note that this is the Tokio TcpListener, which is fully async.
     let mut listener = TcpListener::bind(&addr).await?;
+    let mut gs_listener = TcpListener::bind(&gs_addr).await?;
 
-    info!("gate running on {}", addr);
+    info!("gate running on client:{}, gs:{}", addr, gs_addr);
 
-    let term = Term::stdout();
+    //let term = Term::stdout();
     //term.set_title()
+
+    let gs_ip : Vec<&str> = addr.split(':').collect();
+    let gs_ip = gs_ip[0];
+    let gs_local_addr = IpAddr::from_str(&gs_ip).unwrap();
+
+    // Asynchronously wait for an inbound TcpStream.
+    let (gs_stream, _gs_addr) = gs_listener.accept().await?;
+    info!("server is incoming");
+
+    gs_stream.set_nodelay(true)?;
+    //stream.set_linger(Some( Duration::new(1,0)));
+    gs_stream.set_keepalive(Some(Duration::new(60*1, 0)))?;
+
+    // Clone a handle to the `Shared` state for the new connection.
+    let gs_state = Arc::clone(&state);
+
+    let mut peer_id : i64 = 0;
+    let gs_peer_id = peer_id.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = process(gs_state, gs_stream, gs_local_addr, _gs_addr, gs_peer_id, true).await {
+            warn!("an error occurred; ___ !!!! connection {} {} error = {:?}", gs_peer_id, _gs_addr, e);
+        }
+    });
 
     let ip : Vec<&str> = addr.split(':').collect();
     let ip = ip[0];
     let local_addr = IpAddr::from_str(&ip).unwrap();
 
-    /*let mut server_ip: String;
-    let mut server_port: String = "".to_string();
-    let i = Ini::load_from_file("conf.ini").unwrap();
-    for (sec, prop) in i.iter() {
-        println!("Section: {:?}", sec);
-        for (k, v) in prop.iter() {
-            println!("{}:{}", k, v);
-            if k == "server_ip" {
-                server_ip = v.clone();
-            }
-            else if k == "server_port"{
-                //let vv = v.clone();
-                //let port = vv.into_bytes();
-                server_port = v.clone();//port[0] as u32| ( port[1] << 8 ) as u32 | (port[2] << 16) as u32 | (port[3] << 24) as u32;
-                //println!("port {}, server_port {} ", v, server_port);
-            }
-        }
-    }
-*/
-
     let mut client_id : i64 = 0;
-    let mut peer_id : i64 = -1;
     loop {
         // Asynchronously wait for an inbound TcpStream.
         let (stream, _addr) = listener.accept().await?;
 
-        //stream.set_nonblocking(true);
-        stream.set_nodelay(true);
+        stream.set_nodelay(true)?;
         //stream.set_linger(Some( Duration::new(1,0)));
-        stream.set_keepalive(Some(Duration::new(60*5, 0)));
+        stream.set_keepalive(Some(Duration::new(60*10, 0)))?;
 
         // Clone a handle to the `Shared` state for the new connection.
         let state = Arc::clone(&state);
@@ -183,22 +191,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         peer_id += 1;
         let peer_id2: i64 = peer_id.clone();
-        let mut peer_id3 = peer_id.clone();
+        let peer_id3 = peer_id.clone();
 
-        info!("session [{}] {} has connected", peer_id, _addr);
+        info!("client [{}] {} has connected", peer_id, _addr);
 
         let mut is_server = false;
         if peer_id == 0 {
             //if _addr.port().to_string() == server_port {
-            is_server = true;
-            info!("server is incoming");
+            //is_server = true;
+            //info!("server is incoming");
         }
 
         // Spawn our handler to be run asynchronously.
         tokio::spawn(async move {
             if is_server == false {
-                let mut buf : Vec<u8> = [0u8; 12].to_vec();
+
                 //client incoming
+                /*
+                let mut buf : Vec<u8> = [0u8; 12].to_vec();
                 buf[0] = ( peer_id2 & 0xff ) as u8;
                 buf[1] = ( ( peer_id2 >> 8 ) & 0xff ) as u8;
                 buf[2] = ( ( peer_id2 >> 16 ) & 0xff ) as u8;
@@ -212,18 +222,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
                 buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
                 buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
-                buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;
+                buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;*/
 
-                /*
-                let packet_len = (8 + 4 + 2) as i16;
-                let len : [u8; 2] = packet_len.to_le_bytes();
-                let mut msg_r = String::from_utf8_lossy(&len[0..2]).to_string();
-                msg_r.push_str(&String::from_utf8_lossy(&buf[0..12]).to_string() );
-                */
                 let ip = _addr.ip().to_string();
                 let port = _addr.port().to_string();
 
-                let mut msg_r = unsafe { String::from_utf8_unchecked(buf ) };
+                let msg_type:i32 = 20001;
+                let mut msg_r = unsafe { String::from_utf8_unchecked(peer_id2.to_le_bytes().to_vec() ) };
+                let msg_type = unsafe { String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec() ) };
+                msg_r.push_str( &msg_type );
                 msg_r.push_str(&ip);
                 msg_r.push(':');
                 msg_r.push_str(&port);
@@ -233,10 +240,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             if let Err(e) = process(state, stream, local_addr, _addr, peer_id3, is_server).await {
                 warn!("an error occurred; 000 !!!! connection {} {} error = {:?}", peer_id3, _addr, e);
-                // let peer_id = peer_id.clone();
-                // if !is_server == false {
-                //     notify_server_client_disconnected(&peer_id, &state, &_addr).await;
-                // }
             }
         });
     }
@@ -255,7 +258,7 @@ type Rx = mpsc::UnboundedReceiver<String>;
 /// iterating over the `peers` entries and sending a copy of the message on each
 /// `Tx`.
 struct Shared {
-    peers: HashMap<SocketAddr, Tx>,
+    //peers: HashMap<SocketAddr, Tx>,
     peer_ids : HashMap<i64, Tx>,
     servers : HashMap<SocketAddr, Tx>,
 }
@@ -281,7 +284,7 @@ impl Shared {
     /// Create a new, empty, instance of `Shared`.
     fn new() -> Self {
         Shared {
-            peers: HashMap::new(),
+            //peers: HashMap::new(),
             peer_ids : HashMap:: new(),
             servers : HashMap::new(),
         }
@@ -345,7 +348,7 @@ impl Peer {
 #[derive(Debug)]
 enum Message {
     /// A message that should be broadcasted to others.
-    Broadcast(String),
+   //Broadcast(String),
 
     FromServer(String),
     FromClient(String),
@@ -358,7 +361,6 @@ enum Message {
 // A message is produced whenever an event is ready until the `Framed` stream returns `None`.
 impl Stream for Peer {
     type Item = Result<Message, ()>;
-
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // First poll the `UnboundedReceiver`.
 
@@ -400,7 +402,7 @@ impl Stream for Peer {
 async fn process(
     state: Arc<Mutex<Shared>>,
     stream: TcpStream,
-    local_addr: IpAddr,
+    _local_addr: IpAddr,
     addr: SocketAddr,
     peer_id : i64,
     is_server : bool,
@@ -423,27 +425,14 @@ async fn process(
     //builder.encoded(true);
 
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new());
-    let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new_from_builder(builder));
+    let io_packet = Framed::new(stream, LengthDelimitedCodec::new_from_builder(builder));
     //let codec = LengthDelimitedCodec::builder().little_endian();
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::);
 
     //TODO!另开线程监听服务器端口，由于线程与task通信暂时麻烦，就从配置文件判断是否是服务器ip了
 
-    let mut server_name : String = "".to_string();
-    let mut username = "";
-
-//    if is_server {
-//         // Read the first line from the `LineCodec` stream to get the username.
-//         let mut packet = match io_packet.next().await {
-//             Some(Ok(apacket)) => apacket,
-//             // We didn't get a line so we return early here.
-//             Some(Err(e)) => {
-//                 println!("Failed to get msg from {}, reason: {}. Client disconnected.", addr, e);
-//                 return Ok(());
-//             },
-//             None => BytesMut::new(),
-//         };
-//    }
+    //let server_name : String = "".to_string();
+    let username = "";
 
     let is_server = is_server.clone();
     let is_server2 = is_server.clone();
@@ -453,15 +442,15 @@ async fn process(
     // Register our peer with state which internally sets up some channels.
     let mut peer = Peer::new(state.clone(), io_packet, is_server2, peer_id0 ).await?;
 
-    let first_packet_to_client = true; //first packet is the random seed, a int, no length field
+    //let first_packet_to_client = true; //first packet is the random seed, a int, no length field
 
     // Process incoming messages until our stream is exhausted by a disconnect.
     while let Some(result) = peer.next().await {
         match result {
             // A message was received from the current user, we should
             // broadcast this message to the other users.
-            Ok(Message::Broadcast(msg)) => {
-                let mut state = state.lock().await;
+            /*Ok(Message::Broadcast(msg)) => {
+                //let mut state = state.lock().await;
                 //let msg = format!("{}: {}", username, String::from_utf8(msg).unwrap());
 
                 if is_server {
@@ -471,7 +460,8 @@ async fn process(
                 else {
                     //state.sendto_server(addr,  Bytes::from(msg)).await;
                 }
-            }
+            }*/
+
             Ok(Message::FromServer(msg)) => {
                 let mut state = state.lock().await;
                 //let msg = format!(" {}: {}", username, msg);
@@ -481,7 +471,7 @@ async fn process(
                 //get client_id from msg content
                 if is_server {
                     //state.broadcast(addr, &msg).await;
-                    let mut msg_r = msg.into_bytes();
+                    let msg_r = msg.into_bytes();
                     let id = [msg_r[0], msg_r[1], msg_r[2], msg_r[3], msg_r[4], msg_r[5], msg_r[6], msg_r[7]];
                     let client_id0= i64::from_le_bytes( id );
 
@@ -497,8 +487,9 @@ async fn process(
                 assert_eq!(is_server, false);
 
                 let client_id = peer_id.clone();
+                let msg_type : i32 = 20003;
 
-                let mut buf : Vec<u8> = [0u8; 12].to_vec();
+                /*let mut buf : Vec<u8> = [0u8; 12].to_vec();
                 buf[0]= ( client_id & 0xff ) as u8;
                 buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
                 buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
@@ -508,15 +499,19 @@ async fn process(
                 buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
                 buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
 
-                let msg_type = 20003;
+
                 buf[8] = ( msg_type & 0xff ) as u8;
                 buf[9] = ((msg_type >> 8 ) & 0xff) as u8;
                 buf[10] = ((msg_type >> 16 ) & 0xff) as u8;
                 buf[11] = ((msg_type >> 24 ) & 0xff) as u8;
+                */
 
-                let mut msg_r = unsafe { String::from_utf8_unchecked(buf ) };
+                let mut msg_r = unsafe { String::from_utf8_unchecked(client_id.to_le_bytes().to_vec() ) };
+                let msg_type = unsafe{ String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec()) };
+                msg_r.push_str( &msg_type );
+
                 //println!("to server1: {} ", len);
-                let mut len = msg.len()+2;  //+2 length field length decode时去除了包头（长度），因此这里要加上再给服务器
+                let len = msg.len()+2;  //+2 length field length decode时去除了包头（长度），因此这里要加上再给服务器
                 let mut len = vec!( (len & 0xff) as u8, ( ( len >> 8 ) & 0xff) as u8 );
                 let len2 = encode_head( &mut len ); //在length_delimiter里调用了一次是解密，再次则是加密
 
@@ -537,7 +532,9 @@ async fn process(
                     if !is_server {
                         warn!("close the client [{}] {} because the server is disconnected", peer_id, addr);
                     }
-                    peer.frames.into_inner().shutdown(Shutdown::Both );
+                    if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both ){
+                        warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
+                    }
                     break;
                 }
                 if is_server == false {
@@ -550,8 +547,12 @@ async fn process(
                             let mut state = state.lock().await;
                             let client_id = peer_id.clone();
                             state.peer_ids.remove(&client_id);
-                            peer.frames.close().await;
-                            peer.frames.into_inner().shutdown(Shutdown::Both);
+                            if let Err(e) = peer.frames.close().await{
+                                warn!("close {} {} failed with {} ", peer_id, addr, e);
+                            }
+                            if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
+                                warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
+                            }
                             return Ok(());
                         }
                     }
@@ -562,8 +563,12 @@ async fn process(
                     let mut state = state.lock().await;
                     let client_id = peer_id.clone();
                     state.peer_ids.remove(&client_id);
-                    peer.frames.close().await;
-                    peer.frames.into_inner().shutdown(Shutdown::Both);
+                    if let Err(e) = peer.frames.close().await{
+                        warn!("close {} {} failed with {} ", peer_id, addr, e);
+                    }
+                    if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
+                        warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
+                    }
                     return Err(Box::<dyn Error>::from(e));
                 };
 
@@ -607,8 +612,11 @@ async fn notify_server_client_disconnected( peer_id :&i64, state: &Arc<Mutex<Sha
     warn!("{}", msg);
     //state.broadcast(addr,  Bytes::from(msg)).await;
 
-    let mut buf : Vec<u8> = [0u8; 12].to_vec();
     let client_id = peer_id.clone();
+    let msg_type : i32 = 20002;
+
+    /*
+    let mut buf : Vec<u8> = [0u8; 12].to_vec();
     buf[0]= ( client_id & 0xff ) as u8;
     buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
     buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
@@ -618,13 +626,15 @@ async fn notify_server_client_disconnected( peer_id :&i64, state: &Arc<Mutex<Sha
     buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
     buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
 
-    let msg_type = 20002;
     buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
     buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
     buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
     buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;
+    */
 
-    let mut msg_r = unsafe{ String::from_utf8_unchecked(buf) };
+    let mut msg_r = unsafe{ String::from_utf8_unchecked(client_id.to_le_bytes().to_vec()) };
+    let msg_type = unsafe{ String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec()) };
+    msg_r.push_str( &msg_type );
 
     let mut state = state.lock().await;
     state.sendto_server(&addr,  &msg_r ).await;
