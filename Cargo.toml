@@ -7,7 +7,7 @@ edition = "2018"
 [workspace]
 
 [dev-dependencies]
-tokio = { version = "0.2.0", path = "../tokio", features = ["full"] }
+tokio = { version = "0.2.1", path = "../tokio", features = ["full"] }
 tokio-util = { version = "0.2.0", path = "../tokio-util", features = ["full"] }
 bytes = "0.5"
 futures = "0.3.0"
@@ -80,17 +80,14 @@ name = "center_server"
 path = "center_server.rs"
 
 [[example]]
-name = "center_server_packet_string"
-path = "center_server_packet_string.rs"
+name = "gate_server"
+path = "gate_server.rs"
 
 [[example]]
-name = "center_server_packet_vec"
-path = "center_server_packet_vec.rs"
+name = "gate_server_packet_vec"
+path = "gate_server_packet_vec.rs"
 
 [[example]]
-name = "center_server_packet_bytes"
-path = "center_server_packet_bytes.rs"
+name = "gate_server_packet_bytes"
+path = "gate_server_packet_bytes.rs"
 
-[[example]]
-name = "center_server_echo"
-path = "center_server_echo.rs"

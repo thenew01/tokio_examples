@@ -42,7 +42,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use bytes::Bytes;
+use bytes::{Bytes, Buf};
 use bytes::BytesMut;
 //use tini::Ini;
 use ini::Ini;
@@ -106,10 +106,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 buf[3] = ( ( peer_id2 >> 24 ) & 0xff ) as u8;
 
                 let mut state = state.lock().await;
-                state.sendto_server(&_addr, &Bytes::from(buf)).await;
+                state.sendto_server(Bytes::from(buf)).await;
             }
             if let Err(e) = process(state, stream, local_addr, _addr, peer_id2, is_server).await {
-                println!("an error occured; error = {:?}", e);
+                println!("an error occurred; error = {:?}", e);
             }
         });
     }
@@ -177,27 +177,39 @@ impl Shared {
 				}
 			}
 		}*/
-    async fn sendto_client(&mut self, client: SocketAddr, message: &Bytes) {
-        for peer in self.peers.iter_mut() {
-            //if *peer.0 == client
-            {
-                let _ = peer.1.send( *message) ;
-            }
-        }
-    }
-    async fn sendto_server(&mut self, server: &SocketAddr, message: &Bytes ) {
+    // async fn sendto_client(&mut self, client: SocketAddr, message: Bytes) {
+    //     for peer in self.peers.iter_mut() {
+    //         //if *peer.0 == client
+    //         {
+    //             let _ = peer.1.send( message ) ;
+    //         }
+    //     }
+    // }
+    async fn sendto_server(&mut self, message: Bytes ) {
         for server in self.servers.iter_mut() {
             //if *server.0 == server
             {
-                let _ = server.1.send( *message);
+                let msg = Bytes::from(&message);
+                let _ = server.1.send( msg )?;
             }
         }
+        /*if let Some(server) = self.servers.get_key_value(&server) {
+            let _ = server.1.send( message );
+        }*/
+        // let keys = self.servers.keys();
+        // if let Some(server) = self.servers.get(keys[0]) {
+        //     let _ = server.1.send(message);
+        // }
     }
-    async fn sendto_client_by_id(&mut self, id: i32, message: &Bytes) {
-        for peer in self.peer_ids.iter_mut() {
-            if *peer.0 == id {
-                let _ = peer.1.send( *message);
-            }
+    async fn sendto_client_by_id(&mut self, id: i32, message: Bytes) {
+        // for peer in self.peer_ids.iter_mut() {
+        //     if *peer.0 == id {
+        //         let _ = peer.1.send( message)?;
+        //     }
+        // }
+
+        if let Some(peer) = self.peer_ids.get_key_value(&id) {
+            let _ = peer.1.send( message);
         }
     }
 }
@@ -232,13 +244,15 @@ impl Peer {
 #[derive(Debug)]
 enum Message {
     /// A message that should be broadcasted to others.
-    Broadcast(Bytes ),
+    //Broadcast(Bytes ),
 
     TransferToClient(Bytes ),
     TransferToServer(Bytes),
 
     /// A message that should be received by a client
-    Received(Bytes ),
+    Received(Bytes),
+    //ErrorOccurred(Bytes),
+    ErrorOccurred(String),
 }
 
 // Peer implements `Stream` in a way that polls both the `Rx`, and `Framed` types.
@@ -275,10 +289,12 @@ impl Stream for Peer {
             // An error occured.
             //Some(Err(e)) => Some(Err(e)),
             //Some(Err(e)) => Some(Err( e.source().unwrap())),
+            //Some(Err(e)) => Some( Ok(Message::ErrorOccurred( Bytes::from(e.to_string() ) ) ) ),
+            Some(Err(e)) => Some( Ok(Message::ErrorOccurred( e.to_string() ) ) ),
             _ => None,
 
             // The stream has been exhausted.
-            None => None,
+            //None => None,
         })
     }
 }
@@ -326,18 +342,18 @@ async fn process(
         match result {
             // A message was received from the current user, we should
             // broadcast this message to the other users.
-            Ok(Message::Broadcast(msg)) => {
-                let mut state = state.lock().await;
-                //let msg = format!("{}: {}", username, String::from_utf8(msg).unwrap());
-
-                if is_server {
-                    //state.broadcast(addr, &msg.into_bytes()).await;
-                    //state.sendto_client_by_id(id,  &msg).await;
-                }
-                else {
-                    //state.sendto_server(addr,  Bytes::from(msg)).await;
-                }
-            }
+            // Ok(Message::Broadcast(msg)) => {
+            //     let mut state = state.lock().await;
+            //     //let msg = format!("{}: {}", username, String::from_utf8(msg).unwrap());
+            //
+            //     if is_server {
+            //         //state.broadcast(addr, &msg.into_bytes()).await;
+            //         //state.sendto_client_by_id(id,  &msg).await;
+            //     }
+            //     else {
+            //         //state.sendto_server(Bytes::from(msg)).await;
+            //     }
+            // }
             Ok(Message::TransferToClient(msg)) => {
                 let mut state = state.lock().await;
                 //let msg = format!(" {}: {}", username, msg);
@@ -347,19 +363,19 @@ async fn process(
                 //get client_id from msg content
                 if is_server {
                     //state.broadcast(addr, &msg).await;
-                    let msgR = msg.clone();
+                    //let msgR = msg.clone();
                     let (client_id, msg0) = msg.split_at(4);
                     let sl = client_id;
                     let mut a : [u8; 4] = [sl[0], sl[1], sl[2], sl[3]];
                     let client_id0 = i32::from_le_bytes( a );
-                    state.sendto_client_by_id( client_id0, &msgR ).await;
+                    state.sendto_client_by_id( client_id0, Bytes::from(msg0 ) ).await;
                 }
             }
             Ok(Message::TransferToServer(msg)) => {
                 let mut state = state.lock().await;
                 //let msg = format!(" {}: {}", username, msg.into());
                 assert_eq!(is_server, false);
-                state.sendto_server(&addr,  &msg ).await;
+                state.sendto_server(msg ).await;
             }
 
 
@@ -370,8 +386,14 @@ async fn process(
 
                 peer.frames.send( msg ).await?;
             }
+
+            Ok(Message::ErrorOccurred(e)) => {
+                println!( "{}", e );
+				break;
+            }
             Err(e) => {
                 println!( "an error occured while processing messages for {}; error = {:?}",username, e);
+				break;
             }
         }
     }

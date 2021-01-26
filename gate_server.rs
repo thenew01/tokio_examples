@@ -44,9 +44,11 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use bytes::Bytes;
+use bytes::{Bytes, Buf};
+use std::sync::atomic::{Ordering};
+
 //use bytes::BytesMut;
-////use tini::Ini;
+//use tini::Ini;
 //use ini::Ini;
 
 //use std::intrinsics::size_of;
@@ -61,7 +63,11 @@ use log::{debug, error, info, trace, warn, LevelFilter, SetLoggerError};
     filter::threshold::ThresholdFilter,
 };*/
 
-//use console::Term;
+use console::Term;
+use std::thread::sleep;
+use futures::core_reexport::sync::atomic::AtomicI16;
+//use futures::core_reexport::sync::atomic::AtomicI64;
+//use futures::core_reexport::cmp::Ordering;
 
 /*#[macro_use]
 extern crate log;
@@ -70,8 +76,8 @@ extern crate simplelog;
 */
 
 //use simplelog::*;
-
 //use std::fs::File;
+
 /*
 enum MsgServer
 {
@@ -92,6 +98,8 @@ fn encode_head(src : &mut Vec<u8> ) -> Vec<u8> {
     src[1] = ( src[1] ^ 0xcf ) & 0xff;
     src.to_vec()
 }
+
+static mut CLIENT_NUM :AtomicI16 = AtomicI16::new(0);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -123,15 +131,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // The server task will hold a handle to this. For every new client, the
     // `state` handle is cloned and passed into the task that processes the
     // client connection.
-    let state = Arc::new(Mutex::new(Shared::new()));
+    let state = Arc::new(Mutex::new(Shared::new() ) );
 
     let addr = env::args()
         .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        .unwrap_or_else(|| "127.0.0.1:8080".to_string() );
 
     let gs_addr = env::args()
         .nth(2)
-        .unwrap_or_else(|| "127.0.0.1:8081".to_string());
+        .unwrap_or_else( || "127.0.0.1:8081".to_string() );
+
+    let tcp_no_delay = env::args()
+        .nth(3).unwrap_or_else( || "--tcp=delay".to_string() );
+    let tcp_no_delay= if tcp_no_delay.ends_with("nodelay") { true } else { false };
+
+    info!("tcp_no_delay: {}", tcp_no_delay );
 
     // Bind a TCP listener to the socket address.
     //
@@ -141,7 +155,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!("gate running on client:{}, gs:{}", addr, gs_addr);
 
-    //let term = Term::stdout();
+    let term = Term::stdout();
     //term.set_title()
 
     let gs_ip : Vec<&str> = addr.split(':').collect();
@@ -160,7 +174,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let gs_state = Arc::clone(&state);
 
     let mut peer_id : i64 = 0;
-    let gs_peer_id = peer_id.clone();
+    let gs_peer_id = peer_id;
 
     tokio::spawn(async move {
         if let Err(e) = process(gs_state, gs_stream, gs_local_addr, _gs_addr, gs_peer_id, true).await {
@@ -168,88 +182,72 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    tokio::spawn(async move {
+        loop {
+            sleep(Duration::new(1, 0));
+            unsafe { term.set_title(CLIENT_NUM.load(Ordering::SeqCst)); }
+        }
+    });
+
     let ip : Vec<&str> = addr.split(':').collect();
     let ip = ip[0];
     let local_addr = IpAddr::from_str(&ip).unwrap();
 
-    let mut client_id : i64 = 0;
     loop {
         // Asynchronously wait for an inbound TcpStream.
         let (stream, _addr) = listener.accept().await?;
 
-        stream.set_nodelay(true)?;
+        let tcp_no_delay = tcp_no_delay.clone();
+        stream.set_nodelay(tcp_no_delay)?;
         //stream.set_linger(Some( Duration::new(1,0)));
-        stream.set_keepalive(Some(Duration::new(60*10, 0)))?;
+        //stream.set_keepalive(Some(Duration::new(60*10, 0)))?;
 
         // Clone a handle to the `Shared` state for the new connection.
         let state = Arc::clone(&state);
 
-        client_id += 1;
-
-        //let client_num = client_id.clone();
-        //term.set_title(client_num);
-
         peer_id += 1;
-        let peer_id2: i64 = peer_id.clone();
-        let peer_id3 = peer_id.clone();
+        unsafe{ CLIENT_NUM.fetch_add(1, Ordering::SeqCst); }
+
 
         info!("client [{}] {} has connected", peer_id, _addr);
 
-        let mut is_server = false;
-        if peer_id == 0 {
-            //if _addr.port().to_string() == server_port {
-            //is_server = true;
-            //info!("server is incoming");
-        }
-
         // Spawn our handler to be run asynchronously.
         tokio::spawn(async move {
-            if is_server == false {
-
-                //client incoming
-                /*
-                let mut buf : Vec<u8> = [0u8; 12].to_vec();
-                buf[0] = ( peer_id2 & 0xff ) as u8;
-                buf[1] = ( ( peer_id2 >> 8 ) & 0xff ) as u8;
-                buf[2] = ( ( peer_id2 >> 16 ) & 0xff ) as u8;
-                buf[3] = ( ( peer_id2 >> 24 ) & 0xff ) as u8;
-                buf[4] = ( ( peer_id2 >> 32 ) & 0xff ) as u8;
-                buf[5] = ( ( peer_id2 >> 40 ) & 0xff ) as u8;
-                buf[6] = ( ( peer_id2 >> 48 ) & 0xff ) as u8;
-                buf[7] = ( ( peer_id2 >> 56 ) & 0xff ) as u8;
-
-                let msg_type = 20001;
-                buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
-                buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
-                buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
-                buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;*/
-
+            //client incoming
+            {
                 let ip = _addr.ip().to_string();
                 let port = _addr.port().to_string();
 
                 let msg_type:i32 = 20001;
-                let mut msg_r = unsafe { String::from_utf8_unchecked(peer_id2.to_le_bytes().to_vec() ) };
-                let msg_type = unsafe { String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec() ) };
-                msg_r.push_str( &msg_type );
-                msg_r.push_str(&ip);
-                msg_r.push(':');
-                msg_r.push_str(&port);
+                let mut msg_r = peer_id.to_le_bytes().to_vec();    //unsafe { String::from_utf8_unchecked(peer_id2.to_le_bytes().to_vec() ) };
+                let msg_type = msg_type.to_le_bytes().to_vec(); //unsafe { String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec() ) };
+                //msg_r.push_str( &msg_type );
+                //msg_r.push_str(&ip);
+                //msg_r.push(':');
+                //msg_r.push_str(&port);
+                msg_r.extend(msg_type);
+                msg_r.extend(Bytes::from(ip ) );
+                msg_r.extend(Bytes::from(":" ) );
+                msg_r.extend(Bytes::from(port ) );
 
-                let mut state = state.lock().await;
-                state.sendto_server(&_addr, &msg_r ).await;
+                let mut state0 = state.lock().await;
+                state0.sendto_server(Bytes::from(msg_r)).await;
             }
-            if let Err(e) = process(state, stream, local_addr, _addr, peer_id3, is_server).await {
-                warn!("an error occurred; 000 !!!! connection {} {} error = {:?}", peer_id3, _addr, e);
+
+            if let Err(e) = process(state, stream, local_addr, _addr, peer_id, false).await {
+                warn!("an error occurred; 000 !!!! connection {} {} error = {:?}", peer_id, _addr, e);
             }
+
+            unsafe{ CLIENT_NUM.fetch_sub(1, Ordering::SeqCst); }
         });
     }
 }
 
 /// Shorthand for the transmit half of the message channel.
-type Tx = mpsc::UnboundedSender<String>;
+type Tx = mpsc::UnboundedSender<Bytes>;
 
 /// Shorthand for the receive half of the message channel.
-type Rx = mpsc::UnboundedReceiver<String>;
+type Rx = mpsc::UnboundedReceiver<Bytes>;
 
 /// Data that is shared between all peers in the chat server.
 ///
@@ -291,28 +289,36 @@ impl Shared {
     }
 
     /// Send a message to every clients
-    async fn broadcast(&mut self, message: &String) {
+    async fn broadcast(&mut self, message: Bytes) {
         for peer in self.peer_ids.iter_mut() {
             //if *peer.0 == id
             {
-                let _ = peer.1.send(message.to_string());
+                let _ = peer.1.send( message.clone());
             }
         }
     }
 
-    async fn sendto_server(&mut self, server: &SocketAddr, message: &String) {
+    async fn sendto_server(&mut self, message: Bytes) {
         for server in self.servers.iter_mut() {
             //if *server.0 == server
             {
-                let _ = server.1.send(message.to_string());
+                //let mut msg : Bytes = Bytes::new();
+                //msg.clone_from(message)
+                let _ = server.1.send( message.clone() );
             }
         }
+        // if let Some(server) = self.servers.get_key_value(&server) {
+        //     let _ = server.1.send( message );
+        // }
     }
-    async fn sendto_client_by_id(&mut self, id: i64, message: &String) {
-        for peer in self.peer_ids.iter_mut() {
-            if *peer.0 == id {
-                let _ = peer.1.send(message.to_string());
-            }
+    async fn sendto_client_by_id(&mut self, id: i64, message: Bytes) {
+        // for peer in self.peer_ids.iter_mut() {
+        //     if *peer.0 == id {
+        //         let _ = peer.1.send(message);
+        //     }
+        // }
+        if let Some(peer) = self.peer_ids.get_key_value(&id) {
+            let _ = peer.1.send( message);
         }
     }
 }
@@ -348,13 +354,15 @@ impl Peer {
 #[derive(Debug)]
 enum Message {
     /// A message that should be broadcasted to others.
-   //Broadcast(String),
+    //Broadcast(String),
 
-    FromServer(String),
-    FromClient(String),
+    FromServer(Bytes ),
+    FromClient(Bytes),
 
     /// A message that should be received by a client
-    Received(String),
+    Received(Bytes),
+    //ErrorOccurred(Bytes),
+    ErrorOccurred(String),
 }
 
 // Peer implements `Stream` in a way that polls both the `Rx`, and `Framed` types.
@@ -377,11 +385,11 @@ impl Stream for Peer {
                 //TODO!分服务器客户端分别处理
                 if self.is_server {
                     //给客户端的消息
-                    Some(Ok(Message::FromServer( unsafe{ String::from_utf8_unchecked(message.to_vec()) }.to_string())))
+                    Some(Ok(Message::FromServer( Bytes::from(message.to_vec()))))
                 }
                 else {
                     //给服务器的消息
-                    Some(Ok(Message::FromClient( unsafe { String::from_utf8_unchecked(message.to_vec()) }.to_string())))
+                    Some(Ok(Message::FromClient( Bytes::from(message.to_vec()))))
                 }
                 // We've received a message we should broadcast to others.
                 //Some(Ok(Message::Broadcast(message.to_vec())))
@@ -390,6 +398,8 @@ impl Stream for Peer {
             // An error occured.
             //Some(Err(e)) => Some(Err(e)),
             //Some(Err(e)) => Some(Err( e.source().unwrap())),
+            //Some(Err(e)) => Some( Ok(Message::ErrorOccurred( Bytes::from(e.to_string() ) ) ) ),
+            Some(Err(e)) => Some( Ok(Message::ErrorOccurred( e.to_string() ) ) ),
             _ => None,
 
             // The stream has been exhausted.
@@ -464,21 +474,19 @@ async fn process(
 
             Ok(Message::FromServer(msg)) => {
                 let mut state = state.lock().await;
-                //let msg = format!(" {}: {}", username, msg);
 
                 assert_eq!(is_server, true);
 
                 //get client_id from msg content
                 if is_server {
-                    //state.broadcast(addr, &msg).await;
-                    let msg_r = msg.into_bytes();
-                    let id = [msg_r[0], msg_r[1], msg_r[2], msg_r[3], msg_r[4], msg_r[5], msg_r[6], msg_r[7]];
+                    //let msg_r = msg.clone();
+                    let id = [msg[0], msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7]];
                     let client_id0= i64::from_le_bytes( id );
 
                     //在encoder里不额外添加包头发给客户端
-                    let mut msg_r2 = "".to_string();
-                    msg_r2.push_str(unsafe { &String::from_utf8_unchecked(msg_r[8..].to_vec()) } );
-                    state.sendto_client_by_id( client_id0, &msg_r2).await;
+                    //let mut msg_r2 = "".to_string();
+                    //msg_r2.push_str(unsafe { &String::from_utf8_unchecked(msg_r[8..].to_vec()) } );
+                    state.sendto_client_by_id( client_id0, Bytes::from(msg[8..].to_vec()) ).await;
                 }
             }
             Ok(Message::FromClient(msg)) => {
@@ -486,46 +494,30 @@ async fn process(
 
                 assert_eq!(is_server, false);
 
-                let client_id = peer_id.clone();
+                let client_id = peer_id;
                 let msg_type : i32 = 20003;
 
-                /*let mut buf : Vec<u8> = [0u8; 12].to_vec();
-                buf[0]= ( client_id & 0xff ) as u8;
-                buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
-                buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
-                buf[3] = ( ( client_id >> 24 ) & 0xff ) as u8;
-                buf[4] = ( ( client_id >> 32 ) & 0xff ) as u8;
-                buf[5] = ( ( client_id >> 40 ) & 0xff ) as u8;
-                buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
-                buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
+                //let mut msg_r = unsafe { String::from_utf8_unchecked( client_id.to_le_bytes().to_vec() ) };
+                //let msg_type = unsafe{ String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec() ) };
+                //msg_r.push_str( &msg_type );
+                let mut msg_r = client_id.to_le_bytes().to_vec();
+                let msg_type = msg_type.to_le_bytes().to_vec();
+                msg_r.extend(msg_type );
 
-
-                buf[8] = ( msg_type & 0xff ) as u8;
-                buf[9] = ((msg_type >> 8 ) & 0xff) as u8;
-                buf[10] = ((msg_type >> 16 ) & 0xff) as u8;
-                buf[11] = ((msg_type >> 24 ) & 0xff) as u8;
-                */
-
-                let mut msg_r = unsafe { String::from_utf8_unchecked(client_id.to_le_bytes().to_vec() ) };
-                let msg_type = unsafe{ String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec()) };
-                msg_r.push_str( &msg_type );
-
-                //println!("to server1: {} ", len);
                 let len = msg.len()+2;  //+2 length field length decode时去除了包头（长度），因此这里要加上再给服务器
-                let mut len = vec!( (len & 0xff) as u8, ( ( len >> 8 ) & 0xff) as u8 );
-                let len2 = encode_head( &mut len ); //在length_delimiter里调用了一次是解密，再次则是加密
+                let mut len1 = vec!( (len & 0xff) as u8, ( ( len >> 8 ) & 0xff) as u8 );
+                let len2 = encode_head( &mut len1 ); //在length_delimiter里调用了一次是解密，再次则是加密
 
-                //println!("to server2: {}", len2[0] | len2[1]);
+                //let len3 = unsafe { String::from_utf8_unchecked(len2) } ; //如果不是有效utf8，则会分配并替换为有效的utf8字符
+                //msg_r.push_str( &len3 );
+                //msg_r.push_str(&msg[..]);
+                msg_r.extend(len2);
+                msg_r.extend(&msg[..] );
 
-                let len5 = unsafe { String::from_utf8_unchecked(len2) } ; //如果不是有效utf8，则会分配并替换为有效的utf8字符
-                msg_r.push_str( &len5 );
-                msg_r.push_str(&msg[..]);
-
-                state.sendto_server(&addr,  &msg_r ).await;
+                state.sendto_server( Bytes::from( msg_r.to_vec() ) ).await;
             }
 
-            // A message was received from a peer. Send it to the
-            // current user.
+            // A message was received from a peer. Send it to the current user.
             Ok(Message::Received(msg)) => {
                 //println!("recv is_server {},peer.is_server {} ", &is_server, &peer.is_server);
                 if msg.len() == 0 {
@@ -537,16 +529,18 @@ async fn process(
                     }
                     break;
                 }
-                if is_server == false {
+                if is_server == false { //msg sent to client
                     if msg.len() > 4 {
-                        let inner_msg_type = unsafe { msg.get_unchecked(4..5) };
-                        let inner_msg_type= String::from(inner_msg_type).into_bytes();
+                        let inner_msg_type = msg[4..5].to_vec();  //unsafe { msg.get_unchecked(4..5) };
+                        //let inner_msg_type= inner_msg_type.to_vec();//String::from(inner_msg_type ).into_bytes();
                         let inner_msg_type =  ( inner_msg_type[0] ^ 0xcf ) & 0xff;
                         if inner_msg_type == 3 || inner_msg_type == 14 {
                             warn!("connection [{}] {} closed, because recv MSG_CLOSE or MSG_DISCONNECT", peer_id, addr);
+
                             let mut state = state.lock().await;
-                            let client_id = peer_id.clone();
+                            let client_id = peer_id;
                             state.peer_ids.remove(&client_id);
+
                             if let Err(e) = peer.frames.close().await{
                                 warn!("close {} {} failed with {} ", peer_id, addr, e);
                             }
@@ -558,8 +552,10 @@ async fn process(
                     }
                 }
 
-                if let Err(e) = peer.frames.send(Bytes::from(msg)).await {
+                if let Err(e) = peer.frames.send(Bytes::from(msg)).await { //send msg to client or server
                     warn!("connection {} {} closed send failed ", peer_id, addr);
+                    warn!("an error occurred; connection {} {} error = {:?}", peer_id, addr, e);
+                    /*
                     let mut state = state.lock().await;
                     let client_id = peer_id.clone();
                     state.peer_ids.remove(&client_id);
@@ -569,14 +565,29 @@ async fn process(
                     if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
                         warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
                     }
+                    */
+                    //返回之前先通知服务器客户端断开了
+                    if !is_server {
+                        notify_server_client_disconnected(&peer_id, &state, &addr).await;
+                    }
+                    if let Err(e) = peer.frames.close().await{
+                        warn!("close {} {} failed with {} ", peer_id, addr, e);
+                    }
+                    if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
+                        warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
+                    }
                     return Err(Box::<dyn Error>::from(e));
                 };
-
             }
+            Ok(Message::ErrorOccurred(e)) => {
+                println!( "{}", e );
+                break;
+            }
+
             Err(e) => {
                 warn!( "an error occurred while processing messages for {}; error = {:?}",username, e);
 
-                notify_server_client_disconnected(&peer_id, &state, &addr).await;
+                //notify_server_client_disconnected(&peer_id, &state, &addr).await;
                 break;
             }
         }
@@ -590,10 +601,11 @@ async fn process(
             let msg = format!("server [{}] has left the session", peer_id2);
             warn!("{}", msg);
 
-            let msg_r2= "".to_string(); //send 0 bytes to client notify server is closed
+            //let msg_r= "".to_string(); //send 0 bytes to client notify server is closed
+            let msg_r = Bytes::from("");
 
             let mut state = state.lock().await;
-            state.broadcast(&msg_r2 ).await;
+            state.broadcast(msg_r ).await;
 
             state.servers.remove(&addr);
         }
@@ -612,32 +624,16 @@ async fn notify_server_client_disconnected( peer_id :&i64, state: &Arc<Mutex<Sha
     warn!("{}", msg);
     //state.broadcast(addr,  Bytes::from(msg)).await;
 
-    let client_id = peer_id.clone();
+    let client_id = peer_id;//.clone();
     let msg_type : i32 = 20002;
 
-    /*
-    let mut buf : Vec<u8> = [0u8; 12].to_vec();
-    buf[0]= ( client_id & 0xff ) as u8;
-    buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
-    buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
-    buf[3] = ( ( client_id >> 24 ) & 0xff ) as u8;
-    buf[4] = ( ( client_id >> 32 ) & 0xff ) as u8;
-    buf[5] = ( ( client_id >> 40 ) & 0xff ) as u8;
-    buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
-    buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
-
-    buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
-    buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
-    buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
-    buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;
-    */
-
-    let mut msg_r = unsafe{ String::from_utf8_unchecked(client_id.to_le_bytes().to_vec()) };
-    let msg_type = unsafe{ String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec()) };
-    msg_r.push_str( &msg_type );
+    let mut msg_r = client_id.to_le_bytes().to_vec();    //unsafe{ String::from_utf8_unchecked(client_id.to_le_bytes().to_vec()) };
+    let msg_type = msg_type.to_le_bytes().to_vec();  //unsafe{ String::from_utf8_unchecked( msg_type.to_le_bytes().to_vec()) };
+    //msg_r.push_str( &msg_type );
+    msg_r.extend(msg_type );
 
     let mut state = state.lock().await;
-    state.sendto_server(&addr,  &msg_r ).await;
+    state.sendto_server(Bytes::from(msg_r) ).await;
 
     warn!( "client [{}] {} disconnected, notify server", client_id, addr);
 
