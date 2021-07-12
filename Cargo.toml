@@ -7,8 +7,8 @@ edition = "2018"
 [workspace]
 
 [dev-dependencies]
-tokio = { version = "0.2.1", path = "../tokio", features = ["full"] }
-tokio-util = { version = "0.2.0", path = "../tokio-util", features = ["full"] }
+tokio = { version = "1.1.0", path = "../tokio", features = ["full"] }
+tokio-util = { version = "0.6.2", path = "../tokio-util", features = ["full"] }
 bytes = "0.5"
 futures = "0.3.0"
 http = "0.2"
@@ -25,6 +25,21 @@ simple_logger="1.6.0"
 simplelog = "^0.7.4"
 console="0.10.0"
 log4rs={ version = "0.11.0", default = ["all_components", "file", "yaml_format"]}
+
+mio="0.7.7"
+env_logger = { version = "0.6.2", default-features = false }
+rand = "0.4"
+
+[dependencies]
+log = "0.4.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.82"
+
+[target.'cfg(windows)'.dependencies]
+miow   = "0.3.6"
+winapi = { version = "0.3", features = ["winsock2", "mswsock"] }
+ntapi  = "0.3"
 
 [[example]]
 name = "chat"
@@ -91,3 +106,6 @@ path = "gate_server_packet_vec.rs"
 name = "gate_server_packet_bytes"
 path = "gate_server_packet_bytes.rs"
 
+[[example]]
+name = "mio_server"
+path = "mio_server.rs"

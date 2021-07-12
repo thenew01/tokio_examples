@@ -568,7 +568,7 @@ async fn process(
                     */
                     //返回之前先通知服务器客户端断开了
                     if !is_server {
-                        notify_server_client_disconnected(&peer_id, &state, &addr).await;
+                        notify_server_client_disconnected( &peer_id, &state, &addr).await;
                     }
                     if let Err(e) = peer.frames.close().await{
                         warn!("close {} {} failed with {} ", peer_id, addr, e);
