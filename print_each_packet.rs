@@ -55,7 +55,7 @@
 #![warn(rust_2018_idioms)]
 
 use tokio::net::TcpListener;
-use tokio::stream::StreamExt;
+use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, Decoder};
 
 use std::env;
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // above and must be associated with an event loop, so we pass in a handle
     // to our event loop. After the socket's created we inform that we're ready
     // to go and start accepting connections.
-    let mut listener = TcpListener::bind(&addr).await?;
+    let listener = TcpListener::bind(&addr).await?;
     println!("Listening on: {}", addr);
 
     loop {

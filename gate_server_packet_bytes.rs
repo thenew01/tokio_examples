@@ -28,7 +28,8 @@
 use std::str;
 use std::str::FromStr;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::stream::{Stream, StreamExt};
+//use tokio::stream::{Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{Framed, BytesCodec, LengthDelimitedCodec, LengthDelimitedCodecError};
 
@@ -189,8 +190,8 @@ impl Shared {
         for server in self.servers.iter_mut() {
             //if *server.0 == server
             {
-                let msg = Bytes::from(&message);
-                let _ = server.1.send( msg )?;
+                let msg = message.clone();
+                let _ = server.1.send( msg );
             }
         }
         /*if let Some(server) = self.servers.get_key_value(&server) {

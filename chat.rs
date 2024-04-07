@@ -27,7 +27,7 @@
 #![warn(rust_2018_idioms)]
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::stream::{Stream, StreamExt};
+use tokio_stream::{Stream,StreamExt};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 
@@ -164,7 +164,7 @@ impl Stream for Peer {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // First poll the `UnboundedReceiver`.
 
-        if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_next(cx) {
+        if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_recv(cx) {
             return Poll::Ready(Some(Ok(Message::Received(v))));
         }
 

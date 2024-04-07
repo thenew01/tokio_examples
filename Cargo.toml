@@ -2,43 +2,45 @@
 name = "examples"
 version = "0.0.0"
 publish = false
-edition = "2018"
+edition = "2021"
 
 [workspace]
 
 [dev-dependencies]
 tokio = { version = "1.1.0", path = "../tokio", features = ["full"] }
-tokio-util = { version = "0.6.2", path = "../tokio-util", features = ["full"] }
-bytes = "0.5"
+tokio-util = { version = "0.7.1", path = "../tokio-util", features = ["full"] }
+tokio-stream = { version = "0.1", path = "../tokio-stream" }
+
+bytes = "0.6"
 futures = "0.3.0"
 http = "0.2"
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
 httparse = "1.0"
-time = "0.1"
+time = "0.2.22"
 copy_in_place = "0.2.1"
-tini = "0.2.0"
-rust-ini = "0.14.0"
+tini = "0.4.0"
+rust-ini = "0.16.0"
 log = { version = "^0.4.5", features = ["std"] }
 simple_logger="1.6.0"
-simplelog = "^0.7.4"
-console="0.10.0"
-log4rs={ version = "0.11.0", default = ["all_components", "file", "yaml_format"]}
+simplelog = "^0.8.0"
+console="0.13.0"
+log4rs={ version = "0.13.0", default = ["all_components", "file", "yaml_format"]}
 
-mio="0.7.7"
-env_logger = { version = "0.6.2", default-features = false }
-rand = "0.4"
+mio="0.7.5"
+env_logger = { version = "0.8.1", default-features = false }
+rand = "0.7.3"
 
 [dependencies]
 log = "0.4.8"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.82"
+libc = "0.2.80"
 
 [target.'cfg(windows)'.dependencies]
-miow   = "0.3.6"
-winapi = { version = "0.3", features = ["winsock2", "mswsock"] }
+miow   = "0.3.5"
+winapi = { version = "0.3.9", features = ["winsock2", "mswsock"] }
 ntapi  = "0.3"
 
 [[example]]

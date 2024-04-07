@@ -24,7 +24,7 @@
 use tokio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::stream::{Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -43,9 +43,9 @@ use std::io;
 use std::collections::HashMap;
 
 use std::net::SocketAddr;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr};
 
-use ini::Ini;
+
 use copy_in_place::copy_in_place;
 
 type Tx = mpsc::UnboundedSender<Vec<u8>>;
@@ -246,12 +246,12 @@ async fn process_server(
 	_addr: SocketAddr,
 	peer_id3 : i32,
 	is_server : bool,
-	mut counter2 : Arc<AtomicUsize>,
+	counter2 : Arc<AtomicUsize>,
 ) -> Result<(), Box<dyn Error>> {
 
 	let peer_id = peer_id3.clone();
-	let mut is_server2 = is_server.clone();
-	let mut is_server3 = is_server.clone();
+	let is_server2 = is_server.clone();
+	let is_server3 = is_server.clone();
 
 	let _addr2 = _addr.clone();
 

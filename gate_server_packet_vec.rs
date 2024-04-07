@@ -28,7 +28,7 @@
 use std::str;
 use std::str::FromStr;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::stream::{Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{Framed, BytesCodec, LengthDelimitedCodec, LengthDelimitedCodecError};
 
@@ -42,7 +42,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use bytes::BytesMut;
 //use tini::Ini;
 use ini::Ini;
@@ -367,7 +367,8 @@ async fn process(
             // current user.
             Ok(Message::Received(msg)) => {
                 println!("recv is_server {},peer.is_server {} ", &is_server, &peer.is_server);
-                peer.frames.send( Bytes::from( msg) ).await?;
+                //peer.frames.send( Bytes::from( msg). ).await?;
+                peer.frames.send( msg.as_slice() ).await?;
             }
             Err(e) => {
                 println!( "an error occured while processing messages for {}; error = {:?}",username, e);
