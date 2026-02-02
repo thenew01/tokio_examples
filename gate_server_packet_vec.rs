@@ -292,7 +292,15 @@ async fn process(
     peer_id : i32,
     is_server : bool,
 ) -> Result<(), Box<dyn Error>> {
-    let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new());
+    let mut builder : Builder = Builder::new();
+    builder.little_endian();
+    builder.length_field_length(2);
+    builder.length_adjustment(-2);
+
+
+    //builder.encoded(true);
+    //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new());
+    let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new_from_builder(builder));
     //let codec = LengthDelimitedCodec::builder().little_endian();
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::);
 
@@ -363,6 +371,28 @@ async fn process(
             }
 
 
+                let mut buf : Vec<u8> = [0u8; 12].to_vec();
+                buf[0]= ( client_id & 0xff ) as u8;
+                buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
+                buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
+                buf[3] = ( ( client_id >> 24 ) & 0xff ) as u8;
+                buf[4] = ( ( client_id >> 32 ) & 0xff ) as u8;
+                buf[5] = ( ( client_id >> 40 ) & 0xff ) as u8;
+                buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
+                buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
+
+                let msg_type = 20003;
+                buf[8] = ( msg_type & 0xff ) as u8;
+                buf[9] = ((msg_type >> 8 ) & 0xff) as u8;
+                buf[10] = ((msg_type >> 16 ) & 0xff) as u8;
+                buf[11] = ((msg_type >> 24 ) & 0xff) as u8;
+
+                let mut msg_r = unsafe { String::from_utf8_unchecked(buf ) };
+                msg_r.push_str(&msg[..]);
+
+                state.sendto_server(&addr,  &msg_r ).await;
+            }
+
             // A message was received from a peer. Send it to the
             // current user.
             Ok(Message::Received(msg)) => {
@@ -382,9 +412,46 @@ async fn process(
         let mut state = state.lock().await;
         state.peers.remove(&addr);
 
-        let msg = format!("{} has left the chat", peer_id2);
-        println!("{}", msg);
-        //state.broadcast(addr,  Bytes::from(msg)).await;
+        //notify server or client
+        if is_server {
+            let msg = format!("server {} has left the session", peer_id2);
+            println!("{}", msg);
+
+            //let msg_r2= "".to_string(); //send 0 bytes to close client
+            //state.broadcast(&msg_r2 ).await;
+
+            state.servers.remove(&addr);
+        }
+        else {
+            let msg = format!("client {} has left the session", peer_id2);
+            println!("{}", msg);
+            //state.broadcast(addr,  Bytes::from(msg)).await;
+
+            let client_id = peer_id.clone();
+
+            // let mut buf : Vec<u8> = [0u8; 12].to_vec();
+            // buf[0]= ( client_id & 0xff ) as u8;
+            // buf[1] = ( ( client_id >> 8 ) & 0xff ) as u8;
+            // buf[2] = ( ( client_id >> 16 ) & 0xff ) as u8;
+            // buf[3] = ( ( client_id >> 24 ) & 0xff ) as u8;
+            // buf[4] = ( ( client_id >> 32 ) & 0xff ) as u8;
+            // buf[5] = ( ( client_id >> 40 ) & 0xff ) as u8;
+            // buf[6] = ( ( client_id >> 48 ) & 0xff ) as u8;
+            // buf[7] = ( ( client_id >> 56 ) & 0xff ) as u8;
+            //
+            // let msg_type = 20002;
+            // buf[8] = ( ( msg_type >> 0 ) & 0xff ) as u8;
+            // buf[9] = ( ( msg_type >> 8 ) & 0xff ) as u8;
+            // buf[10] = ( ( msg_type >> 16 ) & 0xff ) as u8;
+            // buf[11] = ( ( msg_type >> 24 ) & 0xff ) as u8;
+            //
+            // let mut msg_r = unsafe{ String::from_utf8_unchecked(buf) };
+            // state.sendto_server(&addr,  &msg_r ).await;
+
+            println!( "client {} {} disconnected, notify server", client_id, addr);
+
+            state.peer_ids.remove(&client_id);
+        }
     }
 
     Ok(())
