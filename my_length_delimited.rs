@@ -341,7 +341,7 @@
 //! [`Encoder`]: ../trait.Encoder.html
 //! [`BytesMut`]: https://docs.rs/bytes/0.4/bytes/struct.BytesMut.html
 
-use crate::codec::{Decoder, Encoder, Framed, FramedRead, FramedWrite};
+use tokio_util::codec::{Decoder, Encoder, Framed, FramedRead, FramedWrite};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -363,7 +363,7 @@ fn encode_head(src : &mut Vec<u8> ) -> Vec<u8> {
 /// that not all configuration settings apply to both encoding and decoding. See
 /// the documentation for specific methods for more detail.
 #[derive(Debug, Clone, Copy)]
-pub struct Builder {
+pub struct MyBuilder {
     // Maximum frame length
     max_frame_len: usize,
 
@@ -392,7 +392,7 @@ pub struct Builder {
 }
 
 /// An error when the number of bytes read is more than max frame length.
-pub struct LengthDelimitedCodecError {
+pub struct MyLengthDelimitedCodecError {
     _priv: (),
 }
 
@@ -405,9 +405,9 @@ pub struct LengthDelimitedCodecError {
 ///
 /// [module level]: index.html
 #[derive(Debug)]
-pub struct LengthDelimitedCodec {
+pub struct MyLengthDelimitedCodec {
     // Configuration values
-    builder: Builder,
+    builder: MyBuilder,
 
     // Read state
     state: DecodeState,
@@ -421,16 +421,16 @@ enum DecodeState {
 
 // ===== impl LengthDelimitedCodec ======
 
-impl LengthDelimitedCodec {
+impl MyLengthDelimitedCodec {
     /// Creates a new `LengthDelimitedCodec` with the default configuration values.
     pub fn new() -> Self {
         Self {
-            builder: Builder::new(),
+            builder: MyBuilder::new(),
             state: DecodeState::Head,
         }
     }
 
-    pub fn new_from_builder( builder0 : Builder) -> Self {
+    pub fn new_from_builder( builder0 : MyBuilder) -> Self {
         Self {
             builder: builder0,
             state: DecodeState::Head,
@@ -440,8 +440,8 @@ impl LengthDelimitedCodec {
 
     /// Creates a new length delimited codec builder with default configuration
     /// values.
-    pub fn builder() -> Builder {
-        Builder::new()
+    pub fn builder() -> MyBuilder {
+        MyBuilder::new()
     }
 
     /// Returns the current max frame setting
@@ -509,7 +509,7 @@ impl LengthDelimitedCodec {
             if n > self.builder.max_frame_len as u64 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    LengthDelimitedCodecError { _priv: () },
+                    MyLengthDelimitedCodecError { _priv: () },
                 ));
             }
 
@@ -559,7 +559,7 @@ impl LengthDelimitedCodec {
     }
 }
 
-impl Decoder for LengthDelimitedCodec {
+impl Decoder for MyLengthDelimitedCodec {
     type Item = BytesMut;
     type Error = io::Error;
 
@@ -590,8 +590,8 @@ impl Decoder for LengthDelimitedCodec {
     }
 }
 
-impl Encoder for LengthDelimitedCodec {
-    type Item = Bytes;
+impl Encoder<Bytes> for MyLengthDelimitedCodec {
+    //type Item = Bytes;
     type Error = io::Error;
 
     fn encode(&mut self, data: Bytes, dst: &mut BytesMut) -> Result<(), io::Error> {
@@ -600,7 +600,7 @@ impl Encoder for LengthDelimitedCodec {
         if n > self.builder.max_frame_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                LengthDelimitedCodecError { _priv: () },
+                MyLengthDelimitedCodecError { _priv: () },
             ));
         }
 
@@ -666,7 +666,7 @@ impl Encoder for LengthDelimitedCodec {
     }
 }
 
-impl Default for LengthDelimitedCodec {
+impl Default for MyLengthDelimitedCodec {
     fn default() -> Self {
         Self::new()
     }
@@ -674,7 +674,7 @@ impl Default for LengthDelimitedCodec {
 
 // ===== impl Builder =====
 
-impl Builder {
+impl MyBuilder {
     /// Creates a new length delimited codec builder with default configuration
     /// values.
     ///
@@ -694,8 +694,8 @@ impl Builder {
     /// # }
     /// # pub fn main() {}
     /// ```
-    pub fn new() -> Builder {
-        Builder {
+    pub fn new() -> MyBuilder {
+        MyBuilder {
             // Default max frame length of 8MB
             max_frame_len: 8 * 1_024 * 1_024,
 
@@ -946,8 +946,8 @@ impl Builder {
     ///     .new_codec();
     /// # }
     /// ```
-    pub fn new_codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec {
+    pub fn new_codec(&self) -> MyLengthDelimitedCodec {
+        MyLengthDelimitedCodec {
             builder: *self,
             state: DecodeState::Head,
         }
@@ -971,7 +971,7 @@ impl Builder {
     /// # }
     /// # pub fn main() {}
     /// ```
-    pub fn new_read<T>(&self, upstream: T) -> FramedRead<T, LengthDelimitedCodec>
+    pub fn new_read<T>(&self, upstream: T) -> FramedRead<T, MyLengthDelimitedCodec>
     where
         T: AsyncRead,
     {
@@ -992,7 +992,7 @@ impl Builder {
     /// # }
     /// # pub fn main() {}
     /// ```
-    pub fn new_write<T>(&self, inner: T) -> FramedWrite<T, LengthDelimitedCodec>
+    pub fn new_write<T>(&self, inner: T) -> FramedWrite<T, MyLengthDelimitedCodec>
     where
         T: AsyncWrite,
     {
@@ -1014,7 +1014,7 @@ impl Builder {
     /// # }
     /// # pub fn main() {}
     /// ```
-    pub fn new_framed<T>(&self, inner: T) -> Framed<T, LengthDelimitedCodec>
+    pub fn new_framed<T>(&self, inner: T) -> Framed<T, MyLengthDelimitedCodec>
     where
         T: AsyncRead + AsyncWrite,
     {
@@ -1032,24 +1032,24 @@ impl Builder {
     }
 }
 
-impl Default for Builder {
+impl Default for MyBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// ===== impl LengthDelimitedCodecError =====
+// ===== impl myLengthDelimitedCodecError =====
 
-impl fmt::Debug for LengthDelimitedCodecError {
+impl fmt::Debug for MyLengthDelimitedCodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LengthDelimitedCodecError").finish()
+        f.debug_struct("myLengthDelimitedCodecError").finish()
     }
 }
 
-impl fmt::Display for LengthDelimitedCodecError {
+impl fmt::Display for MyLengthDelimitedCodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("frame size too big")
     }
 }
 
-impl StdError for LengthDelimitedCodecError {}
+impl StdError for MyLengthDelimitedCodecError {}

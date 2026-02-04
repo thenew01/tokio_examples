@@ -34,7 +34,10 @@ use std::time::Duration;
 //use tokio::stream::{Stream, StreamExt};
 use tokio_stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
-use tokio_util::codec::{Framed,  LengthDelimitedCodec, Builder}; //, LengthDelimitedCodecError};
+use tokio_util::codec::{Framed};
+
+mod my_length_delimited;
+use my_length_delimited::{MyLengthDelimitedCodec, MyBuilder}; 
 
 use futures::SinkExt;
 use std::collections::HashMap;
@@ -46,6 +49,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use bytes::{Bytes};
+use tokio::io::AsyncWriteExt;
 use std::sync::atomic::{Ordering};
 
 //use bytes::BytesMut;
@@ -66,7 +70,8 @@ use log::{debug, error, info, trace, warn, LevelFilter, SetLoggerError};
 
 use console::Term;
 use std::thread::sleep;
-use futures::core_reexport::sync::atomic::AtomicI16;
+use std::sync::atomic::AtomicI16;
+use socket2::{Socket, TcpKeepalive};
 //use futures::core_reexport::sync::atomic::AtomicI64;
 //use futures::core_reexport::cmp::Ordering;
 
@@ -100,7 +105,37 @@ fn encode_head(src : &mut Vec<u8> ) -> Vec<u8> {
     src.to_vec()
 }
 
-static mut CLIENT_NUM :AtomicI16 = AtomicI16::new(0);
+static CLIENT_NUM: AtomicI16 = AtomicI16::new(0);
+
+// Convert a `tokio::net::TcpStream` into a std stream, set TCP keepalive via
+// socket2, then convert back to a tokio TcpStream. If `duration` is `None`,
+// keepalive is disabled.
+fn set_keepalive_socket(
+    stream: tokio::net::TcpStream,
+    duration: Option<Duration>,
+) -> std::io::Result<tokio::net::TcpStream> {
+    // Consume tokio stream to get std stream
+    let std_stream = stream.into_std()?;
+    let sock = Socket::from(std_stream);
+
+    match duration {
+        Some(dur) => {
+            // Try to use TcpKeepalive builder (works on modern socket2)
+            let ka = TcpKeepalive::new().with_time(dur).with_interval(Duration::from_secs(10));
+            if let Err(e) = sock.set_tcp_keepalive(&ka) {
+                warn!("set_tcp_keepalive failed: {}", e);
+            }
+        }
+        None => {
+            if let Err(e) = sock.set_keepalive(false) { warn!("set_keepalive(false) failed: {}", e); }
+        }
+    }
+
+    let std_stream: std::net::TcpStream = sock.into();
+    std_stream.set_nonblocking(true)?;
+    let tok = tokio::net::TcpStream::from_std(std_stream)?;
+    Ok(tok)
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -116,7 +151,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //     ]
     // ).unwrap();
 
-    log4rs::init_file("config/log4rs.yaml", Default::default()).unwrap();
+    println!("Current dir: {:?}", std::env::current_dir());
+
+
+    // Initialize logger (log4rs not enabled in Cargo.toml for this workspace)
+    match log4rs::init_file("config/log4rs.yaml", Default::default()) {     
+        Ok(_) => println!("日志系统初始化成功: {}", "config/log4rs.yaml"),
+        Err(e) => {
+            eprintln!("日志初始化失败: {}", e);           
+        }
+    }
+    info!("started");
 
     //info!("booting up");
     //error!("Bright red error\n");
@@ -151,12 +196,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Bind a TCP listener to the socket address.
     //
     // Note that this is the Tokio TcpListener, which is fully async.
-    let mut listener = TcpListener::bind(&addr).await?;
-    let mut gs_listener = TcpListener::bind(&gs_addr).await?;
+    let  listener = TcpListener::bind(&addr).await?;
+    let  gs_listener = TcpListener::bind(&gs_addr).await?;
 
     info!("gate running on client:{}, gs:{}", addr, gs_addr);
 
     let term = Term::stdout();
+    // Save an original title (friendly program name) and append client count to it
+    let original_title = env::args()
+        .nth(0)
+        .and_then(|p| std::path::Path::new(&p).file_name().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "gate_server".to_string());
     //term.set_title()
 
     let gs_ip : Vec<&str> = addr.split(':').collect();
@@ -167,9 +217,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (gs_stream, _gs_addr) = gs_listener.accept().await?;
     info!("server is incoming");
 
+    let gs_stream = match set_keepalive_socket(gs_stream, Some(Duration::from_secs(60))) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("set keepalive failed for gs_stream: {}", e);
+            // If we failed to set keepalive, try to fall back to original by
+            // converting into std and back; attempt minimal recovery by
+            // using the original gs_stream value is moved, so just recreate
+            // a tokio stream from the error path if possible. Here we return
+            // Err -> panic to avoid losing the stream; but to be safe, create
+            // a new stream via the error is not feasible. So log and continue
+            // by exiting with error.
+            return Err(Box::<dyn Error>::from(e));
+        }
+    };
     gs_stream.set_nodelay(true)?;
     //stream.set_linger(Some( Duration::new(1,0)));
-    gs_stream.set_keepalive(Some(Duration::new(60*1, 0)))?;    
 
     // Clone a handle to the `Shared` state for the new connection.
     let gs_state = Arc::clone(&state);
@@ -186,7 +249,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         loop {
             sleep(Duration::new(1, 0));
-            unsafe { term.set_title(CLIENT_NUM.load(Ordering::SeqCst)); }
+            let n = CLIENT_NUM.load(Ordering::SeqCst);
+            let title = format!("{} -{}", original_title, n);
+            let _ = term.set_title(&title);
         }
     });
 
@@ -198,16 +263,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Asynchronously wait for an inbound TcpStream.
         let (stream, _addr) = listener.accept().await?;
 
+        // Set keepalive using socket2 and then set nodelay.
+        let stream = match set_keepalive_socket(stream, Some(Duration::from_secs(60*10))) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("set keepalive failed for client stream: {}", e);
+                //return Err(Box::<dyn Error>::from(e));
+                continue;
+            }
+        };
+
         let tcp_no_delay = tcp_no_delay.clone();
         stream.set_nodelay(tcp_no_delay)?;
-        //stream.set_linger(Some( Duration::new(1,0)));
-        //stream.set_keepalive(Some(Duration::new(60*10, 0)))?;
 
         // Clone a handle to the `Shared` state for the new connection.
         let state = Arc::clone(&state);
 
         peer_id += 1;
-        unsafe{ CLIENT_NUM.fetch_add(1, Ordering::SeqCst); }
+        CLIENT_NUM.fetch_add(1, Ordering::SeqCst);
 
 
         info!("client [{}] {} has connected", peer_id, _addr);
@@ -239,7 +312,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 warn!("an error occurred; 000 !!!! connection {} {} error = {:?}", peer_id, _addr, e);
             }
 
-            unsafe{ CLIENT_NUM.fetch_sub(1, Ordering::SeqCst); }
+            CLIENT_NUM.fetch_sub(1, Ordering::SeqCst);
         });
     }
 }
@@ -269,7 +342,7 @@ struct Peer {
     /// This handles sending and receiving data on the socket. When using
     /// `Lines`, we can work at the line level instead of having to manage the
     /// raw byte operations.
-    frames: Framed<TcpStream,  LengthDelimitedCodec>,
+    frames: Framed<TcpStream,  MyLengthDelimitedCodec>,
 
     /// Receive half of the message channel.
     ///
@@ -328,7 +401,7 @@ impl Peer {
     /// Create a new instance of `Peer`.
     async fn new(
         state: Arc<Mutex<Shared>>,
-        frames: Framed<TcpStream, LengthDelimitedCodec>,
+        frames: Framed<TcpStream, MyLengthDelimitedCodec>,
         is_server : bool,
         client_id: i64,
     ) -> io::Result<Peer> {
@@ -373,7 +446,7 @@ impl Stream for Peer {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // First poll the `UnboundedReceiver`.
 
-        if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_next(cx) {
+        if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_recv(cx) {
             return Poll::Ready(Some(Ok(Message::Received(v))));
         }
 
@@ -418,7 +491,7 @@ async fn process(
     peer_id : i64,
     is_server : bool,
 ) -> Result<(), Box<dyn Error>> {
-    let mut builder : Builder = Builder::new();
+    let mut builder: MyBuilder = MyBuilder::new();
     builder.little_endian();
     builder.length_field_length(2);
     builder.length_adjustment(-2);
@@ -436,7 +509,7 @@ async fn process(
     //builder.encoded(true);
 
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new());
-    let io_packet = Framed::new(stream, LengthDelimitedCodec::new_from_builder(builder));
+    let io_packet = Framed::new(stream, MyLengthDelimitedCodec::new_from_builder(builder));
     //let codec = LengthDelimitedCodec::builder().little_endian();
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::);
 
@@ -525,7 +598,7 @@ async fn process(
                     if !is_server {
                         warn!("close the client [{}] {} because the server is disconnected", peer_id, addr);
                     }
-                    if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both ){
+                    if let Err(e) = peer.frames.into_inner().shutdown().await {
                         warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
                     }
                     break;
@@ -545,7 +618,7 @@ async fn process(
                             if let Err(e) = peer.frames.close().await{
                                 warn!("close {} {} failed with {} ", peer_id, addr, e);
                             }
-                            if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
+                            if let Err(e) = peer.frames.into_inner().shutdown().await {
                                 warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
                             }
                             return Ok(());
@@ -563,7 +636,7 @@ async fn process(
                     if let Err(e) = peer.frames.close().await{
                         warn!("close {} {} failed with {} ", peer_id, addr, e);
                     }
-                    if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
+                    if let Err(e) = peer.frames.into_inner().shutdown().await {
                         warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
                     }
                     */
@@ -574,7 +647,7 @@ async fn process(
                     if let Err(e) = peer.frames.close().await{
                         warn!("close {} {} failed with {} ", peer_id, addr, e);
                     }
-                    if let Err(e) = peer.frames.into_inner().shutdown(Shutdown::Both){
+                    if let Err(e) = peer.frames.into_inner().shutdown().await {
                         warn!("shutdown {} {} failed with {} ", peer_id, addr, e);
                     }
                     return Err(Box::<dyn Error>::from(e));

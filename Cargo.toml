@@ -26,7 +26,8 @@ log = { version = "^0.4.5", features = ["std"] }
 simple_logger="1.6.0"
 simplelog = "^0.8.0"
 console="0.13.0"
-# log4rs={ version = "0.13.0", default = ["all_components", "file", "yaml_format"]}
+socket2 = "0.6"
+log4rs={ version = "1.3.0", default = ["all_components", "file", "yaml_format"]}
 
 mio="1.0.4"
 # env_logger = { version = "0.8.1", default-features = false }
