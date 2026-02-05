@@ -47,6 +47,7 @@ use std::io;
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use std::task::{Context, Poll};
 use bytes::{Bytes};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
@@ -306,15 +307,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Clone a handle to the `Shared` state for the new connection.
         let state = Arc::clone(&state);
 
+        /*
+        // Try to clone the underlying std socket so we can run a blocking
+        // `peek()` in a background task to detect remote FIN. We consume the
+        // tokio stream, clone the std socket, then restore the primary tokio
+        // stream. On failure we drop the connection and continue accepting.
+        let watcher_arc_opt: Option<StdArc<StdMutex<std::net::TcpStream>>>;
+        let stream = match stream.into_std() {
+            Ok(std_stream) => {
+                // Attempt to clone the std socket for the watcher.
+                match std_stream.try_clone() {
+                    Ok(watcher_std) => {
+                        let _ = std_stream.set_nonblocking(true);
+                        let _ = watcher_std.set_nonblocking(true);
+                        match tokio::net::TcpStream::from_std(std_stream) {
+                            Ok(tok_stream) => {
+                                watcher_arc_opt = Some(StdArc::new(StdMutex::new(watcher_std)));
+                                tok_stream
+                            }
+                            Err(e) => {
+                                warn!("failed to convert std stream back to tokio: {}", e);
+                                // Cannot recover; skip this connection
+                                CLIENT_NUM.fetch_sub(1, Ordering::SeqCst);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // cloning failed, but restore the tokio stream and proceed
+                        match tokio::net::TcpStream::from_std(std_stream) {
+                            Ok(tok_stream) => { watcher_arc_opt = None; tok_stream }
+                            Err(e) => {
+                                warn!("failed to restore tokio stream: {}", e);
+                                CLIENT_NUM.fetch_sub(1, Ordering::SeqCst);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("failed to convert tokio stream into std: {}", e);
+                CLIENT_NUM.fetch_sub(1, Ordering::SeqCst);
+                continue;
+            }
+        };
+        */
+
         peer_id += 1;
         CLIENT_NUM.fetch_add(1, Ordering::SeqCst);
 
 
         info!("client [{}] {} has connected", peer_id, _addr);
 
-        // Spawn our handler to be run asynchronously.
+        // Spawn our handler to be run asynchronously. Perform a one-time
+        // application-layer timeout: if the peer doesn't become readable within
+        // 10 seconds after accept, drop the connection. This keeps the accept
+        // loop non-blocking and is simple and portable.
         tokio::spawn(async move {
-            
 
             //client incoming
             {
@@ -336,6 +386,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let mut state0 = state.lock().await;
                 state0.sendto_server(Bytes::from(msg_r)).await;
             }
+
+            /*
+            // If we created a std socket clone, spawn a background watcher
+            // that uses blocking `peek()` to detect remote FIN. It uses
+            // `spawn_blocking` to avoid blocking the async runtime.
+            if let Some(watcher_arc) = watcher_arc_opt {
+                let watcher_for_task = watcher_arc.clone();
+                let state_for_watcher = Arc::clone(&state);
+                let addr_for_watcher = _addr.clone();
+                let peer_id_for_watcher = peer_id;
+                let is_server_for_watcher = false;
+
+              tokio::spawn(async move {
+                    loop {
+                        let res = tokio::task::spawn_blocking({
+                            let watcher = watcher_for_task.clone();
+                            move || {
+                                let mut guard = watcher.lock().unwrap();
+                                let mut buf = [0u8; 1];
+                                guard.peek(&mut buf)
+                            }
+                        }).await;
+
+                        match res {
+                            Ok(Ok(0)) => {
+                                warn!("tcp-level: remote closed connection [{}] {}", peer_id_for_watcher, addr_for_watcher);
+                                if !is_server_for_watcher {
+                                    notify_server_client_disconnected(&peer_id_for_watcher, &state_for_watcher, &addr_for_watcher).await;
+                                }
+                                break;
+                            }
+                            Ok(Ok(_)) => { /* data available */ }
+                            Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => { /* ignore */ }
+                            Ok(Err(e)) => { warn!("tcp peek error for {} {}: {}", peer_id_for_watcher, addr_for_watcher, e); }
+                            Err(e) => { warn!("watcher spawn_blocking join error: {:?}", e); }
+                        }
+
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                });
+            }
+            */
+           
             /* Check if the stream is readable (has data) within 10 seconds.
             // If no data arrives, disconnect this client.
             match tokio::time::timeout(Duration::from_secs(10), stream.readable()).await {
@@ -400,6 +493,9 @@ struct Peer {
     /// off of this `Rx`, it will be written to the socket.
     rx: Rx,
     is_server : bool,
+    last_activity: std::time::Instant,
+    connection_alive: bool,
+    heartbeat_interval: std::time::Duration,
 }
 
 impl Shared {
@@ -471,7 +567,10 @@ impl Peer {
             state.lock().await.peer_ids.insert(client_id, tx);
         }
 
-        Ok(Peer { frames, rx, is_server })
+        Ok(Peer { frames, rx, is_server, last_activity: std::time::Instant::now(),
+            connection_alive: true,
+            heartbeat_interval: Duration::from_secs(30),
+         } )
     }
 }
 
@@ -486,6 +585,8 @@ enum Message {
     /// A message that should be received by a client
     Received(Bytes),
     //ErrorOccurred(Bytes),
+    ConnectionClosed,  //
+    MyHeartbeat,         // 新增：心跳消息 新增：连接关闭消息
     ErrorOccurred(String),
 }
 
@@ -494,9 +595,21 @@ enum Message {
 impl Stream for Peer {
     type Item = Result<Message, ()>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        //  // 检查连接是否已经标记为断开
+        // if !self.connection_alive {
+        //     return Poll::Ready(None);
+        // }
+
+        // // 检查超时
+        // if self.last_activity.elapsed() > self.heartbeat_interval * 2 {
+        //     self.connection_alive = false;
+        //     return Poll::Ready(Some(Ok(Message::ConnectionClosed)));
+        // }
+
         // First poll the `UnboundedReceiver`.
 
         if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_recv(cx) {
+            self.last_activity = std::time::Instant::now();
             return Poll::Ready(Some(Ok(Message::Received(v))));
         }
 
@@ -524,7 +637,13 @@ impl Stream for Peer {
             //Some(Err(e)) => Some(Err( e.source().unwrap())),
             //Some(Err(e)) => Some( Ok(Message::ErrorOccurred( Bytes::from(e.to_string() ) ) ) ),
             Some(Err(e)) => Some( Ok(Message::ErrorOccurred( e.to_string() ) ) ),
-            _ => None,
+            
+            None => {
+                // Stream has been exhausted.
+                self.connection_alive = false;
+                Some(Ok(Message::ConnectionClosed))
+            },
+            //_ => None,
 
             // The stream has been exhausted.
             //None => None,
@@ -595,6 +714,12 @@ async fn process(
                     //state.sendto_server(addr,  Bytes::from(msg)).await;
                 }
             }*/
+            
+            Ok(Message::MyHeartbeat) => {
+                // Just update last activity time
+                println!("recv MyHeartbeat from {} {}", peer_id, addr);
+                //peer.last_activity = std::time::Instant::now();
+            }
 
             Ok(Message::FromServer(msg)) => {
                 let mut state = state.lock().await;
@@ -644,7 +769,11 @@ async fn process(
             // A message was received from a peer. Send it to the current user.
             Ok(Message::Received(msg)) => {
                 //println!("recv is_server {},peer.is_server {} ", &is_server, &peer.is_server);
-                if msg.len() == 0 {
+                // Treat an empty `Bytes` as a disconnect notification (sent via
+                // internal channels) or as an indicator of no payload. For a
+                // true socket EOF the stream will return `None` and exit the
+                // loop; handling below covers cleanup in both cases.
+                if msg.is_empty() {
                     if !is_server {
                         warn!("close the client [{}] {} because the server is disconnected", peer_id, addr);
                     }
@@ -705,6 +834,10 @@ async fn process(
             }
             Ok(Message::ErrorOccurred(e)) => {
                 println!( "{}", e );
+                break;
+            }
+            Ok(Message::ConnectionClosed) => {
+                warn!("[ConnectionClose]:connection [{}] {} closed", peer_id, addr);
                 break;
             }
 
