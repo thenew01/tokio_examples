@@ -57,7 +57,7 @@ use std::sync::atomic::{Ordering};
 //use ini::Ini;
 
 //use std::intrinsics::size_of;
-use log::{debug, info, warn};
+use log::{info, warn};
 /*use log4rs::{
     append::{
         console::{ConsoleAppender, Target},
@@ -277,7 +277,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             sleep(Duration::new(1, 0));
             let n = CLIENT_NUM.load(Ordering::SeqCst);
-            let title = format!("{} - clients {}", original_title, n);
+            let title = format!("{} - clients：{}", original_title, n);
             let _ = term.set_title(&title);
         }
     });
@@ -292,7 +292,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (stream, _addr) = listener.accept().await?;
 
         // Set keepalive using socket2 and then set nodelay.
-        let stream = match set_keepalive_socket(stream, Some(Duration::from_secs(60*10))) {
+        let mut stream = match set_keepalive_socket(stream, Some(Duration::from_secs(60*10))) {
             Ok(s) => s,
             Err(e) => {
                 warn!("set keepalive failed for client stream: {}", e);
@@ -314,6 +314,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         // Spawn our handler to be run asynchronously.
         tokio::spawn(async move {
+            // Check if the stream is readable (has data) within 10 seconds.
+            // If no data arrives, disconnect this client.
+            match tokio::time::timeout(Duration::from_secs(10), stream.readable()).await {
+                Ok(Ok(())) => {
+                    // stream is readable, proceed
+                }
+                Ok(Err(e)) => {
+                    warn!("stream readable check failed for [{}] {}: {}", peer_id, _addr, e);
+                    let _ = stream.shutdown().await;
+                    CLIENT_NUM.fetch_sub(1, Ordering::SeqCst);
+                    return;
+                }
+                Err(_) => {
+                    // timeout: no message received within 10s
+                    warn!("connection [{}] {} timed out (no message within 10s), disconnecting", peer_id, _addr);
+                    let _ = stream.shutdown().await;
+                    CLIENT_NUM.fetch_sub(1, Ordering::SeqCst);
+                    return;
+                }
+            }
+
             //client incoming
             {
                 let ip = _addr.ip().to_string();
