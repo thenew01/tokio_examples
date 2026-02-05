@@ -44,6 +44,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::io;
+use std::io::Read;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -58,7 +59,7 @@ use std::sync::atomic::{Ordering};
 //use ini::Ini;
 
 //use std::intrinsics::size_of;
-use log::{info, warn};
+use log::{info, warn, error};
 /*use log4rs::{
     append::{
         console::{ConsoleAppender, Target},
@@ -639,9 +640,11 @@ impl Stream for Peer {
             Some(Err(e)) => Some( Ok(Message::ErrorOccurred( e.to_string() ) ) ),
             
             None => {
+                println!("poll_next None");
                 // Stream has been exhausted.
                 self.connection_alive = false;
-                Some(Ok(Message::ConnectionClosed))
+                Some(Ok(Message::ConnectionClosed))                
+                //None
             },
             //_ => None,
 
@@ -677,6 +680,9 @@ async fn process(
     //stream.shutdown(Shutdown::Both);
     //builder.encoded(true);
 
+    let std_stream = stream.into_std().unwrap();
+    let mut stream_cloned = std_stream.try_clone().unwrap();
+    let stream = TcpStream::from_std(std_stream).unwrap();
     //let mut io_packet = Framed::new(stream, LengthDelimitedCodec::new());
     let io_packet = Framed::new(stream, MyLengthDelimitedCodec::new_from_builder(builder));
     //let codec = LengthDelimitedCodec::builder().little_endian();
@@ -833,11 +839,31 @@ async fn process(
                 };
             }
             Ok(Message::ErrorOccurred(e)) => {
-                println!( "{}", e );
+                println!( "[ErrorOccurred] {}", e );
                 break;
             }
             Ok(Message::ConnectionClosed) => {
                 warn!("[ConnectionClose]:connection [{}] {} closed", peer_id, addr);
+                
+                let mut buffer = [0u8; 1];
+                match stream_cloned.read(&mut buffer) {
+                    Ok(n) => {
+                        info!("连接正常关闭，没有错误发生 {} ", n);
+                    }
+                    Err(e) => {
+                        /*match e.kind() {
+                            // ErrorKind::ConnectionReset => println!("TCP RST: 对端强制关闭"),
+                            // ErrorKind::ConnectionAborted => println!("连接中止"),
+                            // ErrorKind::TimedOut => println!("超时"),
+                            // ErrorKind::BrokenPipe => println!("管道破裂"),
+                            // ErrorKind::WouldBlock => println!("非阻塞操作"),
+                            _ => println!("其他错误: {:?}", e),
+                        }*/
+                        // 可以获取详细的错误描述
+                        error!("原始错误: {}", e);
+                    }
+                   
+                }
                 break;
             }
 
