@@ -27,7 +27,7 @@ simple_logger="1.6.0"
 simplelog = "^0.8.0"
 console="0.13.0"
 socket2 = "0.6"
-log4rs={ version = "1.3.0", default = ["all_components", "file", "yaml_format"]}
+log4rs = "0.13.0"
 
 mio="1.0.4"
 # env_logger = { version = "0.8.1", default-features = false }

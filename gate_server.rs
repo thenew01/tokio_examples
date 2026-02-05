@@ -29,7 +29,7 @@ use std::str;
 use std::str::FromStr;
 use tokio::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
-use std::net::{IpAddr,  Shutdown};
+use std::net::IpAddr;
 use std::time::Duration;
 //use tokio::stream::{Stream, StreamExt};
 use tokio_stream::{Stream, StreamExt};
@@ -49,7 +49,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use bytes::{Bytes};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use std::sync::atomic::{Ordering};
 
 //use bytes::BytesMut;
@@ -57,7 +57,7 @@ use std::sync::atomic::{Ordering};
 //use ini::Ini;
 
 //use std::intrinsics::size_of;
-use log::{debug, error, info, trace, warn, LevelFilter, SetLoggerError};
+use log::{debug, info, warn};
 /*use log4rs::{
     append::{
         console::{ConsoleAppender, Target},
@@ -155,6 +155,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
     // Initialize logger (log4rs not enabled in Cargo.toml for this workspace)
+    //log4rs::init_file("config/log4rs.yaml", Default::default())
     match log4rs::init_file("config/log4rs.yaml", Default::default()) {     
         Ok(_) => println!("日志系统初始化成功: {}", "config/log4rs.yaml"),
         Err(e) => {
@@ -213,44 +214,70 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let gs_ip = gs_ip[0];
     let gs_local_addr = IpAddr::from_str(&gs_ip).unwrap();
 
-    // Asynchronously wait for an inbound TcpStream.
-    let (gs_stream, _gs_addr) = gs_listener.accept().await?;
-    info!("server is incoming");
+    // Spawn a task to accept multiple GS connections concurrently.
+    {
+        let gs_listener = gs_listener;
+        let gs_state = Arc::clone(&state);
+        let gs_local_addr = gs_local_addr;
+        tokio::spawn(async move {
+            let mut gs_peer_id: i64 = 0;
+            loop {
+                match gs_listener.accept().await {
+                    Ok((mut gs_stream, gs_addr)) => {
+                        info!("server is incoming {}", gs_addr);
 
-    let gs_stream = match set_keepalive_socket(gs_stream, Some(Duration::from_secs(60))) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("set keepalive failed for gs_stream: {}", e);
-            // If we failed to set keepalive, try to fall back to original by
-            // converting into std and back; attempt minimal recovery by
-            // using the original gs_stream value is moved, so just recreate
-            // a tokio stream from the error path if possible. Here we return
-            // Err -> panic to avoid losing the stream; but to be safe, create
-            // a new stream via the error is not feasible. So log and continue
-            // by exiting with error.
-            return Err(Box::<dyn Error>::from(e));
-        }
-    };
-    gs_stream.set_nodelay(true)?;
-    //stream.set_linger(Some( Duration::new(1,0)));
+                        // Read initial 4 bytes from server stream before configuring socket
+                        let mut gs_header = [0u8; 4];
+                        if let Err(e) = gs_stream.read_exact(&mut gs_header).await {
+                            warn!("failed to read initial 4 bytes from gs_stream: {}", e);
+                            let _ = gs_stream.shutdown().await;
+                            continue;
+                        }
 
-    // Clone a handle to the `Shared` state for the new connection.
-    let gs_state = Arc::clone(&state);
+                        // Compare against expected header (big-endian). If mismatch, close connection.
+                        let expected: u32 = 0x1357_9753;
+                        let got = u32::from_le_bytes(gs_header);
+                        if got != expected {
+                            warn!("gs initial header mismatch: got=0x{:08x}, expected=0x{:08x}; closing", got, expected);
+                            let _ = gs_stream.shutdown().await;
+                            continue;
+                        }
 
-    let mut peer_id : i64 = 0;
-    let gs_peer_id = peer_id;
+                        // Configure keepalive and nodelay
+                        let  gs_stream = match set_keepalive_socket(gs_stream, Some(Duration::from_secs(60))) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!("set keepalive failed for gs_stream: {}", e);
+                                continue;
+                            }
+                        };
 
-    tokio::spawn(async move {
-        if let Err(e) = process(gs_state, gs_stream, gs_local_addr, _gs_addr, gs_peer_id, true).await {
-            warn!("an error occurred; ___ !!!! connection {} {} error = {:?}", gs_peer_id, _gs_addr, e);
-        }
-    });
+                        if let Err(e) = gs_stream.set_nodelay(true) { warn!("set_nodelay failed: {}", e); }
+
+                        gs_peer_id += 1;
+                        let peer_id = gs_peer_id;
+                        let gs_state2 = Arc::clone(&gs_state);
+
+                        tokio::spawn(async move {
+                            if let Err(e) = process(gs_state2, gs_stream, gs_local_addr, gs_addr, peer_id, true).await {
+                                warn!("an error occurred; GS connection {} {} error = {:?}", peer_id, gs_addr, e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        warn!("gs accept failed: {}", e);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+    }
 
     tokio::spawn(async move {
         loop {
             sleep(Duration::new(1, 0));
             let n = CLIENT_NUM.load(Ordering::SeqCst);
-            let title = format!("{} -{}", original_title, n);
+            let title = format!("{} - clients {}", original_title, n);
             let _ = term.set_title(&title);
         }
     });
@@ -259,6 +286,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ip = ip[0];
     let local_addr = IpAddr::from_str(&ip).unwrap();
 
+    let mut peer_id = 0i64;
     loop {
         // Asynchronously wait for an inbound TcpStream.
         let (stream, _addr) = listener.accept().await?;
@@ -268,7 +296,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(s) => s,
             Err(e) => {
                 warn!("set keepalive failed for client stream: {}", e);
-                //return Err(Box::<dyn Error>::from(e));
                 continue;
             }
         };
@@ -603,7 +630,7 @@ async fn process(
                     }
                     break;
                 }
-                if is_server == false { //msg sent to client
+                if !is_server { //msg sent to client
                     if msg.len() > 4 {
                         let inner_msg_type = msg[4..5].to_vec();  //unsafe { msg.get_unchecked(4..5) };
                         //let inner_msg_type= inner_msg_type.to_vec();//String::from(inner_msg_type ).into_bytes();
